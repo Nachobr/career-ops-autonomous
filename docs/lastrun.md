@@ -10,7 +10,7 @@ Detected 4 field/control(s).
 
 Fill summary: filled 0, needs manual check 0, skipped 0.
 
-Audit written: /Users/nacho/Documents/career-ops/output/applications/685-wayve-2026-05-28.md
+Audit written: ./output/applications/685-wayve-2026-05-28.md
 
 Review the application in the browser. I will not submit it for you. Click submit manually if everything is correct.
 Leave this process running while you review; press Ctrl+C when done.

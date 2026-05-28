@@ -54,4 +54,7 @@ cv-*.md
 data/review-queue.md
 data/apply-targets.md
 questions.txt
+data/logs/*
+!data/logs/.gitkeep
+
 
