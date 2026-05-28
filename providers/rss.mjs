@@ -8,7 +8,7 @@ function cleanText(str) {
   if (!str) return '';
   // Strip CDATA wrapper
   str = str.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
-  // Strip simple HTML tags if title has them
+  // Strip simple HTML tags if title/text has them
   str = str.replace(/<\/?[a-z][^>]*>/gi, '');
   // Decode basic XML/HTML entities
   return str
@@ -18,6 +18,13 @@ function cleanText(str) {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&ndash;/g, '–')
+    .replace(/&mdash;/g, '—')
+    .replace(/&lsquo;/g, '‘')
+    .replace(/&rsquo;/g, '’')
+    .replace(/&ldquo;/g, '“')
+    .replace(/&rdquo;/g, '”')
     .trim();
 }
 
@@ -26,8 +33,8 @@ export default {
   id: 'rss',
 
   detect(entry) {
-    if (entry.provider === 'rss' && entry.rss) {
-      return { url: entry.rss };
+    if (entry.provider === 'rss') {
+      return { url: entry.rss || entry.careers_url || '' };
     }
     if (entry.rss) {
       return { url: entry.rss };
@@ -42,25 +49,27 @@ export default {
     const xml = await ctx.fetchText(url);
     const jobs = [];
 
-    // Detect if RSS (<item>) or Atom (<entry>)
-    const hasItems = xml.includes('<item>');
+    // Detect if RSS (<item>) or Atom (<entry>), case-insensitive and attribute-tolerant
+    const hasItems = xml.toLowerCase().includes('<item');
     const entries = hasItems
-      ? xml.match(/<item>[\s\S]*?<\/item>/gi) || []
-      : xml.match(/<entry>[\s\S]*?<\/entry>/gi) || [];
+      ? xml.match(/<item[^>]*>[\s\S]*?<\/item>/gi) || []
+      : xml.match(/<entry[^>]*>[\s\S]*?<\/entry>/gi) || [];
 
     for (const itemXml of entries) {
       // Title
       const titleMatch = itemXml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
       const title = titleMatch ? cleanText(titleMatch[1]) : '';
 
-      // Link (handle <link>text</link> and <link href="..." />)
+      // Link (handle <link href="..." /> first to avoid greedy matching, then <link>text</link>)
       let link = '';
-      const linkTagMatch = itemXml.match(/<link[^>]*>([\s\S]*?)<\/link>/i);
-      if (linkTagMatch && linkTagMatch[1].trim()) {
-        link = cleanText(linkTagMatch[1]);
+      const hrefMatch = itemXml.match(/<link\s+[^>]*href=["']([^"']+)["']/i);
+      if (hrefMatch) {
+        link = cleanText(hrefMatch[1]);
       } else {
-        const hrefMatch = itemXml.match(/<link\s+[^>]*href=["']([^"']+)["']/i);
-        if (hrefMatch) link = cleanText(hrefMatch[1]);
+        const linkTagMatch = itemXml.match(/<link[^>]*>([\s\S]*?)<\/link>/i);
+        if (linkTagMatch && linkTagMatch[1].trim()) {
+          link = cleanText(linkTagMatch[1]);
+        }
       }
 
       // Location - standard namespaces (like <location> or <georss:point>)
