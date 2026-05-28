@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+# 1. Capturar el prompt de los argumentos
+INPUT_DATA="$*"
+
+# Si no hay argumentos, leer de stdin de forma no bloqueante
+if [ -z "$INPUT_DATA" ]; then
+    INPUT_DATA=$(cat)
+fi
+
+# 2. Enviar a LiteLLM y capturar la respuesta completa para ver errores
+RESPONSE=$(curl -s -w "\n%{http_code}" -X POST http://127.0.0.1:4000/v1/chat/completions \
+     -H "Content-Type: application/json" \
+     -d "$(jq -n --arg msg "$INPUT_DATA" '{model: "claude-3-5-sonnet-20241022", messages: [{role: "user", content: $msg}]}')")
+
+# 3. Separar cuerpo de código de estado
+BODY=$(echo "$RESPONSE" | sed '$d')
+STATUS=$(echo "$RESPONSE" | tail -n1)
+
+if [ "$STATUS" -eq 200 ]; then
+    echo "$BODY" | jq -r '.choices[0].message.content'
+else
+    echo "ERROR: El servidor respondió con estado $STATUS"
+    echo "Respuesta: $BODY"
+fi

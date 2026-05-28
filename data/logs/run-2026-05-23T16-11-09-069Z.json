@@ -1,0 +1,35 @@
+{
+  "runId": "2026-05-23T16-11-09-069Z",
+  "startedAt": "2026-05-23T16:11:09.070Z",
+  "endedAt": "2026-05-23T16:11:09.233Z",
+  "aborted": true,
+  "abortReason": "doctor failed (exit 1)",
+  "llm": {
+    "provider": "colab/ngrok",
+    "base": "https://54b7-8-228-6-2.ngrok-free.app",
+    "model": "qwen2.5:14b-instruct-q4_K_M",
+    "hasKey": true
+  },
+  "opts": {
+    "dryRun": false,
+    "only": [
+      "doctor"
+    ],
+    "skip": [],
+    "maxJobs": null,
+    "engine": "runner",
+    "notify": true,
+    "llmBase": null,
+    "llmModel": null,
+    "llmKey": null
+  },
+  "results": [
+    {
+      "name": "doctor",
+      "script": "doctor.mjs",
+      "status": "failed",
+      "code": 1,
+      "ms": 162
+    }
+  ]
+}

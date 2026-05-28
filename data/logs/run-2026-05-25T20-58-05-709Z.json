@@ -1,0 +1,85 @@
+{
+  "runId": "2026-05-25T20-58-05-709Z",
+  "startedAt": "2026-05-25T20:58:05.710Z",
+  "endedAt": "2026-05-25T21:00:50.643Z",
+  "aborted": false,
+  "abortReason": null,
+  "llm": {
+    "provider": "colab/ngrok",
+    "base": "https://641b-34-125-248-122.ngrok-free.app",
+    "model": "qwen2.5:14b-instruct-q4_K_M",
+    "hasKey": true
+  },
+  "opts": {
+    "dryRun": false,
+    "all": false,
+    "only": null,
+    "skip": [],
+    "maxJobs": 1,
+    "engine": "runner",
+    "notify": true,
+    "llmBase": null,
+    "llmModel": null,
+    "llmKey": null,
+    "autoApply": false,
+    "autoApplyLimit": 1
+  },
+  "results": [
+    {
+      "name": "doctor",
+      "script": "doctor.mjs",
+      "status": "ok",
+      "code": 0,
+      "ms": 288
+    },
+    {
+      "name": "scan",
+      "script": "scan.mjs",
+      "status": "ok",
+      "code": 0,
+      "ms": 7198
+    },
+    {
+      "name": "pipeline",
+      "script": "batch-pipeline.mjs",
+      "status": "ok",
+      "code": 0,
+      "ms": 157255
+    },
+    {
+      "name": "merge",
+      "script": "merge-tracker.mjs",
+      "status": "ok",
+      "code": 0,
+      "ms": 50
+    },
+    {
+      "name": "normalize",
+      "script": "normalize-statuses.mjs",
+      "status": "ok",
+      "code": 0,
+      "ms": 35
+    },
+    {
+      "name": "dedup",
+      "script": "dedup-tracker.mjs",
+      "status": "ok",
+      "code": 0,
+      "ms": 34
+    },
+    {
+      "name": "verify",
+      "script": "verify-pipeline.mjs",
+      "status": "ok",
+      "code": 0,
+      "ms": 34
+    },
+    {
+      "name": "followup",
+      "script": "followup-cadence.mjs",
+      "status": "ok",
+      "code": 0,
+      "ms": 36
+    }
+  ]
+}

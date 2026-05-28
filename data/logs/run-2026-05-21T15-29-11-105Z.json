@@ -1,0 +1,51 @@
+{
+  "runId": "2026-05-21T15-29-11-105Z",
+  "startedAt": "2026-05-21T15:29:11.112Z",
+  "endedAt": "2026-05-21T15:29:15.008Z",
+  "aborted": false,
+  "abortReason": null,
+  "llm": {
+    "provider": "colab/ngrok",
+    "base": "https://801a-34-125-86-140.ngrok-free.app",
+    "model": "qwen2.5:14b-instruct-q4_K_M",
+    "hasKey": true
+  },
+  "opts": {
+    "dryRun": false,
+    "only": [
+      "pipeline",
+      "merge",
+      "verify"
+    ],
+    "skip": [],
+    "maxJobs": 1,
+    "engine": "runner",
+    "notify": true,
+    "llmBase": null,
+    "llmModel": null,
+    "llmKey": null
+  },
+  "results": [
+    {
+      "name": "pipeline",
+      "script": "batch-pipeline.mjs",
+      "status": "ok",
+      "code": 0,
+      "ms": 3847
+    },
+    {
+      "name": "merge",
+      "script": "merge-tracker.mjs",
+      "status": "skipped",
+      "reason": "no input",
+      "code": 0
+    },
+    {
+      "name": "verify",
+      "script": "verify-pipeline.mjs",
+      "status": "ok",
+      "code": 0,
+      "ms": 47
+    }
+  ]
+}

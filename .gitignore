@@ -26,6 +26,14 @@ modes/_profile.md
 # Secrets (never commit — use .env.example as template)
 .env
 
+# Local LLM runtime (Ollama / LiteLLM / Qwen)
+.venv/
+*.gguf
+Modelfile
+litellm_config.yaml
+setup_ollama_proxy.sh
+download_qwen.py
+
 # Generated
 .resolved-prompt-*
 node_modules/
@@ -39,5 +47,11 @@ bun.lock
 # Claude Code local
 .claude/settings.local.json
 .claude/memory/
-career-dashboard
 package-lock.json
+cv-*.md
+*.bak
+*.bak-*
+data/review-queue.md
+data/apply-targets.md
+questions.txt
+

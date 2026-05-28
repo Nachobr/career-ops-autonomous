@@ -1,0 +1,2 @@
+{"ts":"2026-05-28T15:35:22.446Z","level":"info","runId":"2026-05-28T15-35-22-436Z-bn5xx0ap","cmd":"run","msg":"run_started","status":"dry-run","steps":["pipeline"],"startedAt":"2026-05-28T15:35:22.445Z","event":"run_started"}
+{"ts":"2026-05-28T15:35:22.446Z","level":"info","runId":"2026-05-28T15-35-22-436Z-bn5xx0ap","cmd":"run","msg":"run_finished","status":"dry-run","stepCount":0,"startedAt":"2026-05-28T15:35:22.445Z","endedAt":"2026-05-28T15:35:22.446Z","event":"run_finished"}

@@ -84,7 +84,7 @@ Built by someone who used it to evaluate 740+ job offers, generate 100+ tailored
 # 1. Clone and install
 git clone https://github.com/santifer/career-ops.git
 cd career-ops && npm install
-npx playwright install chromium   # Required for PDF generation
+npx playwright install chromium   # Required for PDF generation & browser automation
 
 # 2. Check setup
 npm run doctor                     # Validates all prerequisites
@@ -96,20 +96,15 @@ cp templates/portals.example.yml portals.yml       # Customize companies
 # 4. Add your CV
 # Create cv.md in the project root with your CV in markdown
 
-# 5. Personalize with Claude
-claude   # Open Claude Code in this directory
+# 5. Link the CLI globally
+npm link
 
-# Then ask Claude to adapt the system to you:
-# "Change the archetypes to backend engineering roles"
-# "Translate the modes to English"
-# "Add these 5 companies to portals.yml"
-# "Update my profile with this CV I'm pasting"
+# 6. Configure LLM API Keys
+career-ops login --provider gemini                 # Prompts, validates and saves key to .env
 
-# 6. Start using
-# Paste a job URL or run /career-ops
+# 7. Run the autonomous pipeline
+career-ops run --dry-run                           # Verify the planned step sequence
 ```
-
-> **The system is designed to be customized by Claude itself.** Modes, archetypes, scoring weights, negotiation scripts -- just ask Claude to change them. It reads the same files it uses, so it knows exactly what to edit.
 
 See [docs/SETUP.md](docs/SETUP.md) for the full setup guide.
 
@@ -122,7 +117,6 @@ Career-ops supports [Gemini CLI](https://github.com/google-gemini/gemini-cli) na
 ```bash
 # 1. Install Gemini CLI
 npm install -g @google/gemini-cli
-# or: npx @google/gemini-cli --version
 
 # 2. Authenticate (free — uses your Google account)
 gemini auth
@@ -161,21 +155,20 @@ npm run gemini:eval -- "JD text here"
 
 ## Usage
 
-Career-ops is a single slash command with multiple modes:
+Career-Ops is driven by a unified CLI binary `career-ops`. Once linked globally (`npm link`), you can run it directly:
 
-```
-/career-ops                → Show all available commands
-/career-ops {paste a JD}   → Full auto-pipeline (evaluate + PDF + tracker)
-/career-ops scan           → Scan portals for new offers
-/career-ops pdf            → Generate ATS-optimized CV
-/career-ops batch          → Batch evaluate multiple offers
-/career-ops tracker        → View application status
-/career-ops apply          → Fill application forms with AI
-/career-ops pipeline       → Process pending URLs
-/career-ops contacto       → LinkedIn outreach message
-/career-ops deep           → Deep company research
-/career-ops training       → Evaluate a course/cert
-/career-ops project        → Evaluate a portfolio project
+```bash
+career-ops                                  # Show help and all subcommands
+career-ops run                              # End-to-end cycle: doctor -> scan -> pipeline -> merge -> normalize -> dedup -> verify -> followup
+career-ops login --status                   # Check LLM provider key status
+career-ops login --provider openai          # Log in/save key for a provider
+career-ops scan                             # Scan portals for new job postings
+career-ops review list                      # View high-scoring positions in the review queue
+career-ops review approve <id> --browser   # Open a visible Playwright browser to autofill (no submit)
+career-ops apply <url> --browser            # Autofill application form without auto-submitting
+career-ops schedule install --every 3d      # Set up launchd/systemd background timer
+career-ops tracker                          # View status counts of all applications
+career-ops pdf                              # Compile your ATS-optimized CV to PDF
 ```
 
 Or just paste a job URL or description directly -- career-ops auto-detects it and runs the full pipeline.

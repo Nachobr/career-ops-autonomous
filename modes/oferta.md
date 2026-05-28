@@ -163,6 +163,7 @@ Save full evaluation in `reports/{###}-{company-slug}-{YYYY-MM-DD}.md`.
 **URL:**
 **Archetype:** {detected}
 **Score:** {X/5}
+**URL:** {URL de la oferta original}
 **Legitimacy:** {High Confidence | Proceed with Caution | Suspicious}
 **PDF:** {path or pending}
 

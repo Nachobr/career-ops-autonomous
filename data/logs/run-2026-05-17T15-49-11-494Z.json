@@ -1,0 +1,50 @@
+{
+  "runId": "2026-05-17T15-49-11-494Z",
+  "startedAt": "2026-05-17T15:49:11.504Z",
+  "dryRun": true,
+  "opts": {
+    "dryRun": true,
+    "only": null,
+    "skip": [],
+    "maxJobs": null,
+    "engine": "runner",
+    "notify": true,
+    "llmBase": null,
+    "llmModel": null,
+    "llmKey": null
+  },
+  "steps": [
+    {
+      "name": "doctor",
+      "script": "doctor.mjs"
+    },
+    {
+      "name": "scan",
+      "script": "scan.mjs"
+    },
+    {
+      "name": "pipeline",
+      "script": "batch-pipeline.mjs"
+    },
+    {
+      "name": "merge",
+      "script": "merge-tracker.mjs"
+    },
+    {
+      "name": "normalize",
+      "script": "normalize-statuses.mjs"
+    },
+    {
+      "name": "dedup",
+      "script": "dedup-tracker.mjs"
+    },
+    {
+      "name": "verify",
+      "script": "verify-pipeline.mjs"
+    },
+    {
+      "name": "followup",
+      "script": "followup-cadence.mjs"
+    }
+  ]
+}

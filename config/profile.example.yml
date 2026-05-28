@@ -66,9 +66,48 @@ location:
   # For remote roles outside your country:
   # onsite_availability: "1 week/month in any city"
 
+review:
+  # Evaluations scoring ≥ this threshold are appended to data/review-queue.md
+  # for your manual approval. The autonomous loop NEVER submits — see CLAUDE.md.
+  # Approve from the queue with: career-ops review approve q-xxxxxxxx
+  apply_threshold: 4.0
+
+llm:
+  # Provider used by `career-ops runner` (modes/runner.mjs) and by anything
+  # that opts into the LLM-agnostic engine. One of:
+  #   anthropic | openai | gemini | ollama | stub
+  # The corresponding env var must be set:
+  #   anthropic → ANTHROPIC_API_KEY
+  #   openai    → OPENAI_API_KEY    (optional: OPENAI_BASE_URL)
+  #   gemini    → GEMINI_API_KEY
+  #   ollama    → none (uses OLLAMA_HOST / OLLAMA_MODEL)
+  #   stub      → none (deterministic, used by tests)
+  provider: gemini
+  model: gemini-2.0-flash
+  max_tokens: 4096
+  temperature: 0.3
+  fallback: ollama
+
 cv:
   output_format: "html" # "html" (default) or "latex"
   # (Optional) Canva resume design ID for visual CV generation via /career-ops pdf.
   # Find it in your Canva design URL: https://www.canva.com/design/DAxxxxxxx/...
   # The ID starts with "D" and is 11 characters long.
   # canva_resume_design_id: "DAxxxxxxxxx"
+
+# Notifications for unattended runs (Task B).
+# The file channel always writes data/logs/notifications.ndjson.
+# Outbound channels are best-effort: missing secrets warn but never crash.
+notifications:
+  enabled: true
+  channels:
+    - type: file
+      path: data/logs/notifications.ndjson
+      min_severity: info
+    # Uncomment and configure to enable:
+    # - type: slack
+    #   webhook_env: SLACK_WEBHOOK
+    #   min_severity: warn
+    # - type: discord
+    #   webhook_env: DISCORD_WEBHOOK
+    #   min_severity: error

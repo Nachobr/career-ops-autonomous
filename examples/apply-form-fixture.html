@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>career-ops application fixture</title>
+</head>
+<body>
+  <main>
+    <h1>Application form fixture</h1>
+    <form id="application-form">
+      <label for="first_name">First name</label>
+      <input id="first_name" name="first_name" type="text" required>
+
+      <label for="last_name">Last name</label>
+      <input id="last_name" name="last_name" type="text" required>
+
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" required>
+
+      <label for="linkedin">LinkedIn profile</label>
+      <input id="linkedin" name="linkedin" type="url">
+
+      <fieldset>
+        <legend>How did you hear about us?</legend>
+        <label for="source_company">Company website</label>
+        <input id="source_company" name="source" value="Company website" type="radio">
+        <label for="source_linkedin">How did you hear about us? LinkedIn</label>
+        <input id="source_linkedin" name="source" value="LinkedIn" type="radio">
+      </fieldset>
+
+      <label id="source_select_label">How did you hear about us?</label>
+      <div id="source_select" role="combobox" aria-label="How did you hear about us?" aria-labelledby="source_select_label" aria-haspopup="listbox" tabindex="0">
+        Select source
+      </div>
+
+      <label for="why">Why are you interested in this role?</label>
+      <textarea id="why" name="why"></textarea>
+
+      <label for="salary">Expected salary</label>
+      <input id="salary" name="salary" type="text">
+
+      <label for="notice_period">What is your current notice period?</label>
+      <input id="notice_period" name="notice_period" type="text">
+
+      <label for="visa">Do you require visa sponsorship?</label>
+      <select id="visa" name="visa">
+        <option></option>
+        <option>Yes</option>
+        <option>No</option>
+      </select>
+
+      <label for="relocation_london">This role will be based in our London office, would you be willing to relocate to London for this role or do you already live in and around the London area?</label>
+      <textarea id="relocation_london" name="relocation_london"></textarea>
+
+      <label for="relocation_select">This role will be based in our London office, would you be willing to relocate to London for this role or do you already live in and around the London area?</label>
+      <select id="relocation_select" name="relocation_select">
+        <option>Select...</option>
+        <option>Remote</option>
+        <option>Yes, I am willing to relocate</option>
+      </select>
+
+      <label for="ai_terms">By checking this box and proceeding with your application, you confirm that you have read and agreed to these terms and will not use any AI tools or assistants during the interview and assessment process.</label>
+      <input id="ai_terms" name="ai_terms" type="checkbox">
+
+      <button type="button">Continue</button>
+      <button id="submit-application" type="submit">Submit application</button>
+    </form>
+    <script>
+      window.__submitted = false;
+      document.getElementById('application-form').addEventListener('submit', (event) => {
+        event.preventDefault();
+        window.__submitted = true;
+      });
+    </script>
+  </main>
+</body>
+</html>

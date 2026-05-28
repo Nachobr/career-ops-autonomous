@@ -1,0 +1,2 @@
+{"ts":"2026-05-28T15:35:22.289Z","level":"info","runId":"2026-05-28T15-35-22-276Z-fzeyllir","cmd":"run","msg":"run_started","status":"dry-run","steps":["doctor","scan","pipeline","merge","normalize","dedup","verify","followup"],"startedAt":"2026-05-28T15:35:22.287Z","event":"run_started"}
+{"ts":"2026-05-28T15:35:22.289Z","level":"info","runId":"2026-05-28T15-35-22-276Z-fzeyllir","cmd":"run","msg":"run_finished","status":"dry-run","stepCount":0,"startedAt":"2026-05-28T15:35:22.287Z","endedAt":"2026-05-28T15:35:22.289Z","event":"run_finished"}

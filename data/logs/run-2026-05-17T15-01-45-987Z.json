@@ -1,0 +1,58 @@
+{
+  "runId": "2026-05-17T15-01-45-987Z",
+  "startedAt": "2026-05-17T15:01:45.990Z",
+  "dryRun": true,
+  "opts": {
+    "dryRun": true,
+    "only": null,
+    "skip": [],
+    "maxJobs": 2,
+    "engine": "runner",
+    "notify": true,
+    "llmBase": "https://abc.ngrok-free.app",
+    "llmModel": "Qwen/Qwen2.5-7B-Instruct",
+    "llmKey": null
+  },
+  "steps": [
+    {
+      "name": "doctor",
+      "script": "doctor.mjs"
+    },
+    {
+      "name": "scan",
+      "script": "scan.mjs"
+    },
+    {
+      "name": "liveness",
+      "script": "check-liveness.mjs"
+    },
+    {
+      "name": "pipeline",
+      "script": "batch-pipeline.mjs"
+    },
+    {
+      "name": "pdf",
+      "script": "generate-pdf.mjs"
+    },
+    {
+      "name": "merge",
+      "script": "merge-tracker.mjs"
+    },
+    {
+      "name": "normalize",
+      "script": "normalize-statuses.mjs"
+    },
+    {
+      "name": "dedup",
+      "script": "dedup-tracker.mjs"
+    },
+    {
+      "name": "verify",
+      "script": "verify-pipeline.mjs"
+    },
+    {
+      "name": "followup",
+      "script": "followup-cadence.mjs"
+    }
+  ]
+}

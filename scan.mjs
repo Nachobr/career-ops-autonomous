@@ -108,10 +108,21 @@ function buildTitleFilter(titleFilter) {
   const positive = (titleFilter?.positive || []).map(k => k.toLowerCase());
   const negative = (titleFilter?.negative || []).map(k => k.toLowerCase());
 
+  const matchesKeyword = (lower, keyword) => {
+    const k = String(keyword || '').trim().toLowerCase();
+    if (!k) return false;
+    // Avoid false positives like "AI" matching "campaigns".
+    if (/^[a-z0-9+#.]+$/i.test(k) && k.length <= 3) {
+      const escaped = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, 'i').test(lower);
+    }
+    return lower.includes(k);
+  };
+
   return (title) => {
     const lower = title.toLowerCase();
-    const hasPositive = positive.length === 0 || positive.some(k => lower.includes(k));
-    const hasNegative = negative.some(k => lower.includes(k));
+    const hasPositive = positive.length === 0 || positive.some(k => matchesKeyword(lower, k));
+    const hasNegative = negative.some(k => matchesKeyword(lower, k));
     return hasPositive && !hasNegative;
   };
 }
@@ -193,7 +204,7 @@ function loadSeenCompanyRoles() {
 function appendToPipeline(offers) {
   if (offers.length === 0) return;
 
-  let text = readFileSync(PIPELINE_PATH, 'utf-8');
+  let text = existsSync(PIPELINE_PATH) ? readFileSync(PIPELINE_PATH, 'utf-8') : '# Pipeline\n\n## Pendientes\n\n## Procesadas\n';
 
   // Find "## Pendientes" section and append after it
   const marker = '## Pendientes';

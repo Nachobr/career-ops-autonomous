@@ -1,0 +1,25 @@
+Acme AI — Senior AI Platform Engineer (Remote, US)
+
+About Acme AI
+We're building the leading evaluation and observability platform for production
+LLM systems. Our customers ship safer agents 10x faster.
+
+The Role
+You'll own the agent eval pipeline end-to-end: ingestion, scoring, drift
+detection, and the dashboards that PMs and ML engineers rely on every day.
+
+Requirements
+- 5+ years building production ML or LLM systems
+- Strong Python, distributed systems (Kafka/Kubernetes/Redis a plus)
+- Experience with model monitoring and CI/CD for ML
+- Comfort working directly with customers
+
+Nice to have
+- Prompt engineering, agent frameworks (LangChain/LlamaIndex)
+- Prior LLMOps tooling work
+
+Compensation
+$180K–$220K base + equity. Full remote, US time-zone overlap.
+
+How to apply
+Send a portfolio link and a 200-word note on a system you've shipped.

@@ -1,0 +1,2 @@
+{"ts":"2026-05-28T15:33:29.630Z","level":"info","runId":"2026-05-28T15-33-29-618Z-vmnt2bk0","cmd":"run","msg":"run_started","status":"dry-run","steps":["doctor","scan","pipeline","merge","normalize","dedup","verify","followup"],"startedAt":"2026-05-28T15:33:29.628Z","event":"run_started"}
+{"ts":"2026-05-28T15:33:29.630Z","level":"info","runId":"2026-05-28T15-33-29-618Z-vmnt2bk0","cmd":"run","msg":"run_finished","status":"dry-run","stepCount":0,"startedAt":"2026-05-28T15:33:29.628Z","endedAt":"2026-05-28T15:33:29.630Z","event":"run_finished"}
