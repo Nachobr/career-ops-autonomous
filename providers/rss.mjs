@@ -4,6 +4,10 @@
 // RSS / Atom feed provider — parses XML feeds using regex.
 // Supports both RSS (<item>) and Atom (<entry>) schemas.
 
+/**
+ * @param {string} str
+ * @returns {string}
+ */
 function cleanText(str) {
   if (!str) return '';
   // Strip CDATA wrapper
