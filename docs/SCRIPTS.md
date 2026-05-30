@@ -10,6 +10,9 @@ All scripts live in the project root as `.mjs` modules and are exposed via `npm 
 | `npm run run:pipeline` | `bin/career-ops.mjs run` | End-to-end autonomous pipeline |
 | `career-ops schedule ...` | `commands/schedule.mjs` | Recurring autonomous runs |
 | `career-ops login ...` | `commands/login.mjs` | Configure LLM provider credentials |
+| `career-ops retry-dead-letter ...` | `commands/retry-dead-letter.mjs` | Requeue failed scrape/scan/LLM items from the DLQ |
+| `career-ops migrate-tracker` | `commands/migrate-tracker.mjs` | Import `data/applications.md` into SQLite |
+| `career-ops tracker export ...` | `bin/career-ops.mjs` + `lib/tracker-db.mjs` | Export the SQLite tracker mirror as md/csv/json |
 | `npm run doctor` | `doctor.mjs` | Validate setup prerequisites |
 | `npm run verify` | `verify-pipeline.mjs` | Check pipeline data integrity |
 | `npm run normalize` | `normalize-statuses.mjs` | Fix non-canonical statuses |
@@ -40,7 +43,7 @@ career-ops tracker
 career-ops run --dry-run
 ```
 
-The dispatcher forwards arguments to the underlying script and propagates the child process exit code. Internal commands currently include `run`, `tracker`, `schedule`, `review`, and `colab`.
+The dispatcher forwards arguments to the underlying script and propagates the child process exit code. Internal commands currently include `run`, `tracker`, `schedule`, `review`, `retry-dead-letter`, and `colab`.
 
 **Exit codes:** `0` command success, `2` unknown command or not-yet-implemented placeholder, `127` missing target script, otherwise the wrapped script's exit code.
 
@@ -88,6 +91,44 @@ notifications:
 Slack and Discord read webhook URLs from environment variables named by `webhook_env`; missing secrets warn and record a failed channel result instead of crashing. `desktop` uses `node-notifier` only if that dependency already exists, otherwise it records `desktop channel not available`. `email` is a forward-compatible stub and currently records `email channel not implemented`.
 
 Use `career-ops run --no-alerts` to skip notification calls entirely for that run. This is separate from `--no-notify`, which only suppresses the printed summary block.
+
+---
+
+## SQLite tracker mirror
+
+`lib/tracker-db.mjs` stores a SQLite mirror of `data/applications.md` in `data/applications.db` (or `CAREER_OPS_TRACKER_DB` for tests/overrides). It creates `applications`, `follow_ups`, and `dead_letter` tables, enables WAL mode with a 5s busy timeout, preserves tracker strings verbatim, and renders markdown back in the same table shape expected by existing scripts.
+
+```bash
+career-ops migrate-tracker                 # import current data/applications.md
+career-ops migrate-tracker --dry-run       # parse/report only
+career-ops migrate-tracker --db /tmp/apps.db
+career-ops tracker export --format=md
+career-ops tracker export --format=csv --out output/tracker.csv
+career-ops tracker export --format=json
+```
+
+`merge-tracker.mjs` keeps the DB mirror synchronized and regenerates `data/applications.md` from SQLite after applying pending TSV additions. `career-ops tracker` with no subcommand still prints the human summary.
+
+**Exit codes:** `0` success, `1` missing tracker or write failure, `2` invalid args.
+
+---
+
+## retry and dead-letter queue
+
+`lib/retry.mjs` exposes `withRetry(fn, opts)` plus `DEFAULT_RETRY` for exponential backoff with jitter. It is used around flaky I/O: job scraping, LLM provider calls, PDF page loading, and provider HTTP calls used by `scan.mjs`.
+
+`lib/dead-letter.mjs` records exhausted failures as NDJSON in `data/dead-letter.ndjson` with `ts`, `source`, `url`, `error`, `attempts`, `runId`, and optional `meta`. Tests can isolate the queue with `CAREER_OPS_DEAD_LETTER=<path>`.
+
+```bash
+career-ops retry-dead-letter --list     # inspect queued failures
+career-ops retry-dead-letter --dry-run  # preview requeue actions
+career-ops retry-dead-letter            # requeue scrape/scan/llm URLs into data/pipeline.md
+career-ops retry-dead-letter --clear    # empty the DLQ
+```
+
+`scrape`, `scan`, and `llm` entries are appended to `data/pipeline.md` if not already present and removed from the DLQ. `pdf` entries remain listed with a notice because regenerating a PDF needs the original report/input context.
+
+**Exit codes:** `0` success, `2` invalid flags.
 
 ---
 

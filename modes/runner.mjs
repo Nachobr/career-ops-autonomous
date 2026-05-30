@@ -44,6 +44,7 @@ try {
 } catch { /* dotenv missing — that's fine */ }
 
 import { getProvider, listProviders } from './providers/index.mjs';
+import { withRetry } from '../lib/retry.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -56,6 +57,15 @@ const PATHS = {
   reports: join(ROOT, 'reports'),
   config:  join(ROOT, 'config', 'profile.yml'),
 };
+
+function retryLlmError(err) {
+  return /rate|timeout|ECONN|ETIMEDOUT|5\d\d|overloaded|429/i.test(String(err?.message || err || ''));
+}
+
+function retryLog(err, attempt, delayMs) {
+  const msg = String(err?.message || err || 'error').split('\n')[0];
+  console.warn(`  ↻ retry ${attempt} after ${delayMs}ms: ${msg}`);
+}
 
 // ── helpers ─────────────────────────────────────────────────────
 
@@ -312,12 +322,16 @@ export async function runMode({
   const { systemPrompt } = buildSystemPrompt(mode, inputs);
   const userPrompt = buildUserPrompt(inputs);
 
-  const { text, usage } = await prov.complete({
+  const { text, usage } = await withRetry(() => prov.complete({
     system: systemPrompt,
     user: userPrompt,
     model: effectiveModel,
     maxTokens: effectiveMaxTokens,
     temperature: effectiveTemperature,
+  }), {
+    attempts: 4,
+    retryOn: retryLlmError,
+    onRetry: retryLog,
   });
 
   const summary = parseSummary(text);

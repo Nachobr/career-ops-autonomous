@@ -8,7 +8,7 @@ function resolveApiUrl(entry) {
   const url = entry.careers_url || '';
   const match = url.match(/jobs\.ashbyhq\.com\/([^/?#]+)/);
   if (!match) return null;
-  return `https://api.ashbyhq.com/posting-api/job-board/${match[1]}?includeCompensation=true`;
+  return `https://api.ashbyhq.com/posting-api/job-board/${match[1]}`;
 }
 
 /** @type {Provider} */

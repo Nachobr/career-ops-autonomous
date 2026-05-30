@@ -15,7 +15,7 @@
  */
 
 import { spawn } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 
@@ -61,6 +61,7 @@ const COMMANDS = {
   followup:   { script: 'followup-cadence.mjs',  desc: 'Compute follow-up cadence (JSON output).' },
   apply:      { script: 'apply-assistant.mjs',   desc: 'Live application assistant (form-filling helper).' },
   tracker:    { internal: 'tracker',             desc: 'Print application tracker summary.' },
+  'migrate-tracker': { internal: 'migrate-tracker', desc: 'Import data/applications.md into the SQLite tracker mirror.' },
   'sync-check': { script: 'cv-sync-check.mjs',   desc: 'Check cv.md vs derived CVs are in sync.' },
   update:     { script: 'update-system.mjs',     desc: 'Update career-ops: check | apply | rollback | dismiss.' },
   test:       { script: 'test-all.mjs',          desc: 'Run the full test suite.' },
@@ -68,6 +69,7 @@ const COMMANDS = {
   schedule:   { internal: 'schedule',             desc: 'Schedule recurring career-ops runs.' },
   runner:     { script: 'modes/runner.mjs',       desc: 'Headless executor for modes/*.md prompts (LLM-agnostic).' },
   review:     { internal: 'review',                desc: 'Submit-review queue (list | show | approve | reject | enqueue).' },
+  'retry-dead-letter': { internal: 'retry-dead-letter', desc: 'Reprocess failed items from the dead-letter queue (--list | --clear | --dry-run).' },
   'apply-targets': { internal: 'apply-targets',     desc: 'Open reachable targets from data/apply-targets.md (next | list).' },
   login:      { internal: 'login',                 desc: 'Configure LLM provider credentials in .env.' },
   colab:      { internal: 'colab',                desc: 'Manage the Google Colab LLM backend (status | test | set | clear).' },
@@ -79,6 +81,7 @@ const ALIASES = {
   'follow-up': 'followup',
   health: 'doctor',
   selftest: 'test',
+  dlq: 'retry-dead-letter',
 };
 
 // ── Version ─────────────────────────────────────────────────────
@@ -182,10 +185,16 @@ Examples:
     return;
   }
   if (meta.internal === 'tracker') {
-    console.log(`Prints a summary of data/applications.md: total rows plus counts by status.
+    console.log(`Prints a summary of data/applications.md, or exports the SQLite tracker mirror.
 
 Usage:
   career-ops tracker
+  career-ops tracker export --format=md|csv|json [--out <file>]
+
+Export flags:
+  --format=md|csv|json  Output format (default: md).
+  --out <file>          Write export to a file instead of stdout.
+  -h, --help            Show tracker export help.
 `);
     return;
   }
@@ -262,6 +271,62 @@ function printTrackerSummary() {
   return 0;
 }
 
+function printTrackerExportHelp() {
+  console.log(`career-ops tracker export — export the SQLite tracker mirror
+
+Usage:
+  career-ops tracker export --format=md|csv|json [--out <file>]
+
+Flags:
+  --format=md|csv|json  Output format (default: md).
+  --out <file>          Write export to a file instead of stdout.
+  -h, --help            Show this help.
+`);
+}
+
+function csvCell(value) {
+  const s = String(value ?? '');
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+async function trackerExport(args) {
+  const opts = { format: 'md', out: null, help: false, invalid: null };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--help' || arg === '-h') opts.help = true;
+    else if (arg === '--format') opts.format = args[++i] || '';
+    else if (arg.startsWith('--format=')) opts.format = arg.slice('--format='.length);
+    else if (arg === '--out') opts.out = args[++i] || '';
+    else if (arg.startsWith('--out=')) opts.out = arg.slice('--out='.length);
+    else opts.invalid = arg;
+  }
+  if (opts.help) { printTrackerExportHelp(); return 0; }
+  if (opts.invalid || !['md', 'csv', 'json'].includes(opts.format) || opts.out === '') {
+    console.error(`career-ops tracker export: invalid argument ${opts.invalid || opts.format || '--out'}`);
+    return 2;
+  }
+
+  const { closeDb, getApplications, openDb, renderTrackerMarkdown } = await import(pathToFileURL(join(ROOT, 'lib', 'tracker-db.mjs')).href);
+  const db = openDb();
+  try {
+    const rows = getApplications(db);
+    let output;
+    if (opts.format === 'json') {
+      output = `${JSON.stringify(rows, null, 2)}\n`;
+    } else if (opts.format === 'csv') {
+      const header = ['id', 'date', 'company', 'role', 'score', 'status', 'pdf', 'report', 'notes'];
+      output = `${header.join(',')}\n${rows.map((row) => header.map((col) => csvCell(row[col])).join(',')).join('\n')}\n`;
+    } else {
+      output = renderTrackerMarkdown(rows);
+    }
+    if (opts.out) writeFileSync(resolve(ROOT, opts.out), output, 'utf-8');
+    else process.stdout.write(output);
+    return 0;
+  } finally {
+    closeDb(db);
+  }
+}
+
 // ── Dispatcher ──────────────────────────────────────────────────
 function spawnScript(scriptRel, args) {
   const scriptAbs = join(ROOT, scriptRel);
@@ -294,6 +359,12 @@ function spawnScript(scriptRel, args) {
 
 async function runInternal(name, args) {
   if (name === 'tracker') {
+    if (args[0] === 'export') process.exit(await trackerExport(args.slice(1)));
+    if (args[0] === '--help' || args[0] === '-h') { printHelpFor('tracker'); process.exit(0); }
+    if (args.length > 0) {
+      console.error(`career-ops tracker: unknown subcommand ${args[0]}`);
+      process.exit(2);
+    }
     process.exit(printTrackerSummary());
   }
   const file = name === 'run' ? 'run.mjs' : `${name}.mjs`;

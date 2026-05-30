@@ -1,2 +1,0 @@
-{"ts":"2026-05-28T15:49:07.955Z","level":"info","runId":"notify-test-run","cmd":"run","msg":"run_started","status":"dry-run","steps":["doctor"],"startedAt":"2026-05-28T15:49:07.953Z","event":"run_started"}
-{"ts":"2026-05-28T15:49:07.955Z","level":"info","runId":"notify-test-run","cmd":"run","msg":"run_finished","status":"dry-run","stepCount":0,"startedAt":"2026-05-28T15:49:07.953Z","endedAt":"2026-05-28T15:49:07.955Z","event":"run_finished"}

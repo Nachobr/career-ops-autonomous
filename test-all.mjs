@@ -69,12 +69,12 @@ const scripts = [
   { name: 'verify-pipeline.mjs', expectExit: 0 },
   { name: 'normalize-statuses.mjs', expectExit: 0 },
   { name: 'dedup-tracker.mjs', expectExit: 0 },
-  { name: 'merge-tracker.mjs', expectExit: 0 },
+  { name: 'merge-tracker.mjs', expectExit: 0, env: { CAREER_OPS_TRACKER_DB: join(mkdtempSync(join(tmpdir(), 'career-ops-merge-db-')), 'applications.db') } },
   { name: 'update-system.mjs check', expectExit: 0 },
 ];
 
-for (const { name, allowFail } of scripts) {
-  const result = run('node', name.split(' '), { stdio: ['pipe', 'pipe', 'pipe'] });
+for (const { name, allowFail, env } of scripts) {
+  const result = run('node', name.split(' '), { stdio: ['pipe', 'pipe', 'pipe'], env: env ? { ...process.env, ...env } : process.env });
   if (result !== null) {
     pass(`${name} runs OK`);
   } else if (allowFail) {
@@ -110,7 +110,7 @@ const cliTask1Help = run('node', ['bin/career-ops.mjs', '--help']);
 const expectedCliCommands = [
   'scan', 'pipeline', 'eval', 'gemini-eval', 'pdf', 'latex', 'liveness',
   'merge', 'verify', 'normalize', 'dedup', 'doctor', 'patterns', 'followup',
-  'apply', 'tracker', 'update', 'test', 'run', 'schedule', 'runner', 'review', 'login', 'colab',
+  'apply', 'tracker', 'migrate-tracker', 'update', 'test', 'run', 'schedule', 'runner', 'review', 'login', 'colab',
 ];
 const missingCliCommands = expectedCliCommands.filter(cmd => !new RegExp(`\\b${cmd}\\b`).test(cliTask1Help || ''));
 if (cliTask1Help && missingCliCommands.length === 0) {
@@ -499,6 +499,170 @@ try {
   if (oldNotifyEnv.slack == null) delete process.env.SLACK_WEBHOOK; else process.env.SLACK_WEBHOOK = oldNotifyEnv.slack;
   if (oldNotifyEnv.testWebhook == null) delete process.env.TEST_WEBHOOK; else process.env.TEST_WEBHOOK = oldNotifyEnv.testWebhook;
 }
+
+// ── 2F. RETRY + DEAD-LETTER QUEUE (Task 9) ─────────────────────
+
+console.log('\n2F. Retry + dead-letter queue (Task 9)');
+
+for (const f of ['lib/retry.mjs', 'lib/dead-letter.mjs', 'commands/retry-dead-letter.mjs']) {
+  const result = run('node', ['--check', f]);
+  if (result !== null) pass(`${f} syntax OK`);
+  else fail(`${f} has syntax errors`);
+}
+
+try {
+  const { withRetry } = await import(pathToFileURL(join(ROOT, 'lib', 'retry.mjs')).href);
+  let calls = 0;
+  const out = await withRetry(() => {
+    calls++;
+    if (calls < 3) throw new Error('temporary failure');
+    return 'ok';
+  }, { attempts: 4, baseMs: 1, jitter: 0 });
+  if (out === 'ok' && calls === 3) pass('withRetry succeeds after transient failures');
+  else fail('withRetry did not retry until success as expected');
+} catch (e) {
+  fail(`withRetry success-after-failures test crashed: ${e.message}`);
+}
+
+try {
+  const { withRetry } = await import(pathToFileURL(join(ROOT, 'lib', 'retry.mjs')).href);
+  let calls = 0;
+  try {
+    await withRetry(() => { calls++; throw new Error('still down'); }, { attempts: 2, baseMs: 1, jitter: 0 });
+    fail('withRetry exhaustion unexpectedly resolved');
+  } catch (e) {
+    if (calls === 2 && e.attempts === 2) pass('withRetry exhaustion annotates attempts');
+    else fail('withRetry exhaustion did not call/annotate attempts correctly');
+  }
+} catch (e) {
+  fail(`withRetry exhaustion test crashed: ${e.message}`);
+}
+
+try {
+  const { withRetry } = await import(pathToFileURL(join(ROOT, 'lib', 'retry.mjs')).href);
+  let calls = 0;
+  try {
+    await withRetry(() => { calls++; throw new Error('auth failed'); }, { attempts: 4, baseMs: 1, retryOn: () => false });
+    fail('withRetry retryOn=false unexpectedly resolved');
+  } catch {
+    if (calls === 1) pass('withRetry retryOn=false short-circuits');
+    else fail(`withRetry retryOn=false called ${calls} times`);
+  }
+} catch (e) {
+  fail(`withRetry retryOn=false test crashed: ${e.message}`);
+}
+
+const oldDlqEnv = {
+  dlq: process.env.CAREER_OPS_DEAD_LETTER,
+  runId: process.env.CAREER_OPS_RUN_ID,
+};
+try {
+  const tmp = mkdtempSync(join(tmpdir(), 'career-ops-dlq-'));
+  const dlq = join(tmp, 'dead-letter.ndjson');
+  process.env.CAREER_OPS_DEAD_LETTER = dlq;
+  process.env.CAREER_OPS_RUN_ID = 'test';
+  const mod = await import(`${pathToFileURL(join(ROOT, 'lib', 'dead-letter.mjs')).href}?test=${Date.now()}`);
+  mod.recordDeadLetter({ source: 'scrape', url: 'https://example.com/a', error: 'HTTP 503', attempts: 4 });
+  mod.recordDeadLetter({ source: 'llm', url: 'https://example.com/b', error: 'timeout\nstack', attempts: 2 });
+  const entries = mod.readDeadLetter();
+  const iso = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+  if (entries.length === 2 && entries[0].source === 'scrape' && entries[1].url === 'https://example.com/b' && iso.test(entries[0].ts) && entries[0].runId === 'test') {
+    pass('dead-letter round-trip writes and reads isolated NDJSON');
+  } else {
+    fail('dead-letter round-trip missing expected fields');
+  }
+} catch (e) {
+  fail(`dead-letter round-trip test crashed: ${e.message}`);
+} finally {
+  if (oldDlqEnv.dlq == null) delete process.env.CAREER_OPS_DEAD_LETTER; else process.env.CAREER_OPS_DEAD_LETTER = oldDlqEnv.dlq;
+  if (oldDlqEnv.runId == null) delete process.env.CAREER_OPS_RUN_ID; else process.env.CAREER_OPS_RUN_ID = oldDlqEnv.runId;
+}
+
+const retryDlqHelp = run('node', ['bin/career-ops.mjs', 'retry-dead-letter', '--help']);
+if (retryDlqHelp !== null && retryDlqHelp.includes('--list') && retryDlqHelp.includes('--clear')) {
+  pass('career-ops retry-dead-letter --help exits 0');
+} else {
+  fail('career-ops retry-dead-letter --help missing expected usage');
+}
+
+const retryDlqCliHelp = run('node', ['bin/career-ops.mjs', '--help']);
+if (retryDlqCliHelp !== null && retryDlqCliHelp.includes('retry-dead-letter')) {
+  pass('career-ops --help lists retry-dead-letter');
+} else {
+  fail('career-ops --help does not list retry-dead-letter');
+}
+
+// ── 2G. SQLITE TRACKER MIRROR (Task 10) ─────────────────────────
+
+console.log('\n2G. SQLite tracker mirror (Task 10)');
+
+for (const f of ['lib/tracker-db.mjs', 'commands/migrate-tracker.mjs']) {
+  const result = run('node', ['--check', f]);
+  if (result !== null) pass(`${f} syntax OK`);
+  else fail(`${f} has syntax errors`);
+}
+
+const trackerSample = `# Application Tracker
+
+| ID | Fecha | Empresa | Rol | Score | Estado | PDF | Report |
+|----|-------|---------|-----|-------|--------|-----|--------|
+| 42 | 2026-05-20 | Acme | Senior AI Engineer | 4.5/5 | Evaluated | ✅ | [42](reports/042-acme.md) |  |
+| 17 | 2026-05-19 | Beta Co | Product Manager | N/A | SKIP |  | [17](reports/017-beta.md) | Not a fit |
+| 31 | 2026-05-18 | Gamma | Staff Platform Engineer | 3.7/5 | Applied | ✅ | [31](reports/031-gamma.md) | Followed up |
+`;
+
+try {
+  const trackerMod = await import(`${pathToFileURL(join(ROOT, 'lib', 'tracker-db.mjs')).href}?test=${Date.now()}`);
+  const tmp = mkdtempSync(join(tmpdir(), 'career-ops-tracker-'));
+  const dbPath = join(tmp, 'applications.db');
+  const db = trackerMod.openDb(dbPath);
+  try {
+    const rows = trackerMod.parseTrackerMarkdown(trackerSample);
+    trackerMod.syncApplications(db, rows);
+    const rendered = trackerMod.renderTrackerMarkdown(trackerMod.getApplications(db));
+    if (rendered.trimEnd() === trackerSample.trimEnd()) pass('tracker markdown → DB → markdown round-trip is stable');
+    else fail('tracker markdown round-trip changed output');
+
+    trackerMod.syncApplications(db, rows);
+    if (trackerMod.rowCount(db) === rows.length) pass('tracker migration/upsert is idempotent');
+    else fail(`tracker row count changed after idempotent import: ${trackerMod.rowCount(db)}`);
+
+    const byId = new Map(trackerMod.getApplications(db).map((row) => [row.id, row]));
+    if (byId.get(42)?.score_num === 4.5 && byId.get(17)?.score_num === null) pass('tracker score_num derives numeric scores and preserves N/A as null');
+    else fail('tracker score_num derivation failed');
+  } finally {
+    trackerMod.closeDb(db);
+  }
+} catch (e) {
+  fail(`tracker round-trip/idempotency tests crashed: ${e.message}`);
+}
+
+try {
+  const trackerMod = await import(`${pathToFileURL(join(ROOT, 'lib', 'tracker-db.mjs')).href}?concurrency=${Date.now()}`);
+  const tmp = mkdtempSync(join(tmpdir(), 'career-ops-tracker-concurrency-'));
+  const dbPath = join(tmp, 'applications.db');
+  const db1 = trackerMod.openDb(dbPath);
+  const db2 = trackerMod.openDb(dbPath);
+  try {
+    trackerMod.upsertApplication(db1, { id: 1, date: '2026-05-20', company: 'One', role: 'Role One', score: '4.0/5', status: 'Evaluated', pdf: '✅', report: '[1](reports/1.md)', notes: '' });
+    trackerMod.upsertApplication(db2, { id: 2, date: '2026-05-21', company: 'Two', role: 'Role Two', score: 'N/A', status: 'SKIP', pdf: '', report: '[2](reports/2.md)', notes: '' });
+    if (trackerMod.rowCount(db1) === 2 && trackerMod.rowCount(db2) === 2) pass('tracker WAL concurrency smoke writes from two connections');
+    else fail('tracker WAL concurrency smoke row count mismatch');
+  } finally {
+    trackerMod.closeDb(db1);
+    trackerMod.closeDb(db2);
+  }
+} catch (e) {
+  fail(`tracker concurrency smoke crashed: ${e.message}`);
+}
+
+const migrateHelp = run('node', ['bin/career-ops.mjs', 'migrate-tracker', '--help']);
+if (migrateHelp !== null && migrateHelp.includes('--dry-run')) pass('career-ops migrate-tracker --help exits 0');
+else fail('career-ops migrate-tracker --help missing expected usage');
+
+const trackerExportHelp = run('node', ['bin/career-ops.mjs', 'tracker', 'export', '--help']);
+if (trackerExportHelp !== null && trackerExportHelp.includes('--format=md|csv|json')) pass('career-ops tracker export --help exits 0');
+else fail('career-ops tracker export --help missing expected usage');
 
 // ── 3. LIVENESS CLASSIFICATION ──────────────────────────────────
 

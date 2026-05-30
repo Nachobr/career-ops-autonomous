@@ -18,6 +18,8 @@ import { fileURLToPath } from 'url';
 import { execFileSync } from 'child_process';
 import { chromium } from 'playwright';
 import { runMode } from './modes/runner.mjs';
+import { DEFAULT_RETRY, withRetry } from './lib/retry.mjs';
+import { recordDeadLetter } from './lib/dead-letter.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PIPELINE_PATH = join(ROOT, 'data', 'pipeline.md');
@@ -281,6 +283,21 @@ function getPendingJobs() {
 const SCRAPE_TIMEOUT_MS = parseInt(process.env.CAREER_OPS_SCRAPE_TIMEOUT_MS || '15000', 10);
 const API_TIMEOUT_MS = parseInt(process.env.CAREER_OPS_API_TIMEOUT_MS || '8000', 10);
 
+function firstLine(err) {
+  return String(err?.message || err || 'error').split('\n')[0];
+}
+
+function retryLog(err, attempt, delayMs) {
+  console.warn(`  ↻ retry ${attempt} after ${delayMs}ms: ${firstLine(err)}`);
+}
+
+function isRetryableHttp(err) {
+  if (!err) return false;
+  if (err.status) return err.status === 429 || err.status >= 500;
+  const msg = String(err.message || err);
+  return /fetch failed|network|timeout|abort|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket|429|5\d\d/i.test(msg);
+}
+
 function htmlToText(html) {
   if (!html) return '';
   return html
@@ -302,16 +319,25 @@ function htmlToText(html) {
 }
 
 async function fetchJsonWithTimeout(url) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), API_TIMEOUT_MS);
   try {
-    const res = await fetch(url, { signal: ctrl.signal, headers: { 'User-Agent': 'career-ops/1.0' } });
+    const res = await withRetry(async () => {
+      const response = await fetch(url, { signal: AbortSignal.timeout(API_TIMEOUT_MS), headers: { 'User-Agent': 'career-ops/1.0' } });
+      if (!response.ok && (response.status === 429 || response.status >= 500)) {
+        const err = new Error(`HTTP ${response.status}`);
+        err.status = response.status;
+        throw err;
+      }
+      return response;
+    }, {
+      ...DEFAULT_RETRY,
+      retryOn: isRetryableHttp,
+      onRetry: retryLog,
+    });
     if (!res.ok) return { ok: false, status: res.status };
     return { ok: true, json: await res.json() };
   } catch (e) {
+    if (e.status) return { ok: false, status: e.status };
     return { ok: false, error: e.message };
-  } finally {
-    clearTimeout(t);
   }
 }
 
@@ -394,39 +420,51 @@ async function scrapeJD(browser, url, companyHint) {
   }
   try {
     console.log(`🌐  Scraping: ${url}...`);
-    // domcontentloaded fires fast; 'networkidle' never resolves on sites with
-    // long-polling / analytics beacons (HelloFresh, Workday, etc.).
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: SCRAPE_TIMEOUT_MS });
+    const jd = await withRetry(async () => {
+      // domcontentloaded fires fast; 'networkidle' never resolves on sites with
+      // long-polling / analytics beacons (HelloFresh, Workday, etc.).
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: SCRAPE_TIMEOUT_MS });
 
-    // Small settle wait so SPA boards (Ashby, Greenhouse embed) render content.
-    await page.waitForTimeout(1500);
+      // Small settle wait so SPA boards (Ashby, Greenhouse embed) render content.
+      await page.waitForTimeout(1500);
 
-    const jd = await page.evaluate(() => {
-      // Better selectors for common job boards
-      const selectors = [
-        '[class*="ashby-job-posting-content"]', // Ashby (partial match)
-        '#job-description', 
-        '.job-description',
-        '.postings-container',
-        '#section-main',
-        'main', 'article'
-      ];
-      
-      for (const s of selectors) {
-        const el = document.querySelector(s);
-        if (el && el.innerText.length > 200) {
-          return el.innerText.replace(/\s+/g, ' ').trim();
+      return await page.evaluate(() => {
+        // Better selectors for common job boards
+        const selectors = [
+          '[class*="ashby-job-posting-content"]', // Ashby (partial match)
+          '#job-description', 
+          '.job-description',
+          '.postings-container',
+          '#section-main',
+          'main', 'article'
+        ];
+        
+        for (const s of selectors) {
+          const el = document.querySelector(s);
+          if (el && el.innerText.length > 200) {
+            return el.innerText.replace(/\s+/g, ' ').trim();
+          }
         }
-      }
-      // Fallback: try to find the largest text block
-      const divs = Array.from(document.querySelectorAll('div, section'));
-      const largest = divs.sort((a, b) => b.innerText.length - a.innerText.length)[0];
-      return largest ? largest.innerText.replace(/\s+/g, ' ').trim() : document.body.innerText;
+        // Fallback: try to find the largest text block
+        const divs = Array.from(document.querySelectorAll('div, section'));
+        const largest = divs.sort((a, b) => b.innerText.length - a.innerText.length)[0];
+        return largest ? largest.innerText.replace(/\s+/g, ' ').trim() : document.body.innerText;
+      });
+    }, {
+      ...DEFAULT_RETRY,
+      attempts: 3,
+      retryOn: isRetryableHttp,
+      onRetry: retryLog,
     });
     
     return jd.trim();
   } catch (err) {
-    console.error(`❌  Failed to scrape ${url}: ${err.message.split('\n')[0]}`);
+    console.error(`❌  Failed to scrape ${url}: ${firstLine(err)}`);
+    try {
+      recordDeadLetter({ source: 'scrape', url, error: err, attempts: err.attempts ?? 1 });
+    } catch (dlqErr) {
+      console.warn(`⚠️  Could not record dead-letter entry: ${firstLine(dlqErr)}`);
+    }
     return null;
   } finally {
     try { if (page) await page.close(); } catch {}
@@ -701,7 +739,12 @@ async function main() {
         console.log(`✅  Done with ${job.company}`);
       } catch (err) {
         failed++;
-        console.error(`❌  Evaluation failed for ${job.company}: ${err.message.split('\n')[0]}`);
+        console.error(`❌  Evaluation failed for ${job.company}: ${firstLine(err)}`);
+        try {
+          recordDeadLetter({ source: 'llm', url: job.url, error: err, attempts: err.attempts ?? 1 });
+        } catch (dlqErr) {
+          console.warn(`⚠️  Could not record dead-letter entry: ${firstLine(dlqErr)}`);
+        }
         if (isLikelyBackendFailure(err)) {
           stoppedForBackend = true;
           console.error('🛑 LLM backend appears unavailable. Stopping batch so pending jobs remain queued for a later resume.');

@@ -32,6 +32,7 @@ import path from 'path';
 import yaml from 'js-yaml';
 
 import { makeHttpCtx } from './providers/_http.mjs';
+import { recordDeadLetter } from './lib/dead-letter.mjs';
 
 const parseYaml = yaml.load;
 
@@ -446,6 +447,11 @@ async function main() {
       }
     } catch (err) {
       errors.push({ company: company.name, error: err.message });
+      try {
+        recordDeadLetter({ source: 'scan', url: company.careers_url || company.url || company.name, error: err, attempts: err.attempts ?? 1 });
+      } catch (dlqErr) {
+        console.warn(`⚠️  Could not record dead-letter entry: ${String(dlqErr?.message || dlqErr).split('\n')[0]}`);
+      }
     }
   });
 

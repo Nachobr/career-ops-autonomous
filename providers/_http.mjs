@@ -1,19 +1,29 @@
 // HTTP transport helpers shared across providers.
 // Files prefixed with _ are never loaded as providers by scan.mjs.
 
-const DEFAULT_TIMEOUT_MS = 10_000;
+import { withRetry } from '../lib/retry.mjs';
+
+const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_USER_AGENT = 'Mozilla/5.0 (compatible; career-ops/1.3)';
 
+function retryableHttp(err) {
+  if (err?.status) return err.status === 429 || err.status >= 500;
+  return /fetch failed|network|timeout|abort|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket|429|5\d\d/i.test(String(err?.message || err || ''));
+}
+
+function retryLog(err, attempt, delayMs) {
+  const msg = String(err?.message || err || 'error').split('\n')[0];
+  console.warn(`  ↻ retry ${attempt} after ${delayMs}ms: ${msg}`);
+}
+
 async function fetchWithTimeout(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers = {}, method = 'GET', body = null, redirect = 'follow' } = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
+  return await withRetry(async () => {
     const res = await fetch(url, {
       method,
       headers: { 'user-agent': DEFAULT_USER_AGENT, ...headers },
       body,
       redirect,
-      signal: controller.signal,
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) {
       const responseText = await res.text().catch(() => '');
@@ -24,9 +34,11 @@ async function fetchWithTimeout(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers =
       throw err;
     }
     return res;
-  } finally {
-    clearTimeout(timer);
-  }
+  }, {
+    attempts: 3,
+    retryOn: retryableHttp,
+    onRetry: retryLog,
+  });
 }
 
 export async function fetchJson(url, opts = {}) {

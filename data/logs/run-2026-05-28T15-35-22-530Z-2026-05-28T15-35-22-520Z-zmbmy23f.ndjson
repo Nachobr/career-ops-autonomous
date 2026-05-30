@@ -1,2 +1,0 @@
-{"ts":"2026-05-28T15:35:22.531Z","level":"info","runId":"2026-05-28T15-35-22-520Z-zmbmy23f","cmd":"run","msg":"run_started","status":"dry-run","steps":["doctor"],"startedAt":"2026-05-28T15:35:22.530Z","event":"run_started"}
-{"ts":"2026-05-28T15:35:22.531Z","level":"info","runId":"2026-05-28T15-35-22-520Z-zmbmy23f","cmd":"run","msg":"run_finished","status":"dry-run","stepCount":0,"startedAt":"2026-05-28T15:35:22.530Z","endedAt":"2026-05-28T15:35:22.531Z","event":"run_finished"}

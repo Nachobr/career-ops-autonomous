@@ -77,6 +77,11 @@ Built by someone who used it to evaluate 740+ job offers, generate 100+ tailored
 | **Dashboard TUI** | Terminal UI to browse, filter, and sort your pipeline |
 | **Human-in-the-Loop** | AI evaluates and recommends, you decide and act. The system never submits an application -- you always have the final call |
 | **Pipeline Integrity** | Automated merge, dedup, status normalization, health checks |
+| **Autonomous Run** | Single `career-ops run` orchestrates scan → evaluate → PDF → tracker → verify end-to-end |
+| **Scheduling** | `career-ops schedule` installs a launchd/systemd timer (or foreground daemon) to run on a cadence |
+| **Review Queue** | High-scoring offers queue for approval; nothing is submitted without your explicit action |
+| **Resilience** | Exponential-backoff retries + a dead-letter queue so one flaky URL never aborts the batch |
+| **SQLite Mirror** | Tracker mirrored to SQLite (WAL) as the source of truth, with markdown regenerated from it |
 
 ## Quick Start
 
@@ -106,7 +111,9 @@ career-ops login --provider gemini                 # Prompts, validates and save
 career-ops run --dry-run                           # Verify the planned step sequence
 ```
 
-See [docs/SETUP.md](docs/SETUP.md) for the full setup guide.
+See [docs/SETUP.md](docs/SETUP.md) for the full setup guide, and
+[docs/AUTONOMOUS.md](docs/AUTONOMOUS.md) for running career-ops as a fully autonomous,
+single-CLI pipeline (install → login → run → schedule → review → apply).
 
 ## Gemini CLI Integration
 
@@ -168,6 +175,9 @@ career-ops review approve <id> --browser   # Open a visible Playwright browser t
 career-ops apply <url> --browser            # Autofill application form without auto-submitting
 career-ops schedule install --every 3d      # Set up launchd/systemd background timer
 career-ops tracker                          # View status counts of all applications
+career-ops tracker export --format=md       # Regenerate tracker markdown from the SQLite mirror
+career-ops migrate-tracker                  # Import data/applications.md into the SQLite mirror
+career-ops retry-dead-letter --list         # Inspect failures captured by the retry/dead-letter queue
 career-ops pdf                              # Compile your ATS-optimized CV to PDF
 ```
 
@@ -275,7 +285,7 @@ career-ops/
 - **PDF**: Playwright/Puppeteer + HTML template
 - **Scanner**: Playwright + Greenhouse API + WebSearch
 - **Dashboard**: Go + Bubble Tea + Lipgloss (Catppuccin Mocha theme)
-- **Data**: Markdown tables + YAML config + TSV batch files
+- **Data**: Markdown tables + YAML config + TSV batch files, mirrored to SQLite (WAL) for safe concurrent access
 
 ## Also Open Source
 

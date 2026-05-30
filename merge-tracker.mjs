@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync, readdirSync, mkdirSync, renameSync, exists
 import { join, basename, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execFileSync } from 'child_process';
+import { closeDb, getApplications, openDb, parseTrackerMarkdown, renderTrackerMarkdown, rowCount, syncApplications } from './lib/tracker-db.mjs';
 
 const CAREER_OPS = dirname(fileURLToPath(import.meta.url));
 // Support both layouts: data/applications.md (boilerplate) and applications.md (original)
@@ -172,6 +173,20 @@ function parseAppLine(line) {
   };
 }
 
+function syncTrackerDb(markdownText, { rewriteMarkdown = false } = {}) {
+  const rows = parseTrackerMarkdown(markdownText);
+  const db = openDb();
+  try {
+    syncApplications(db, rows);
+    if (rewriteMarkdown) {
+      writeFileSync(APPS_FILE, renderTrackerMarkdown(getApplications(db)), 'utf-8');
+    }
+    return rowCount(db);
+  } finally {
+    closeDb(db);
+  }
+}
+
 /**
  * Parse a TSV file content into a structured addition object.
  * Handles: 9-col TSV, 8-col TSV, pipe-delimited markdown.
@@ -287,6 +302,7 @@ if (!existsSync(ADDITIONS_DIR)) {
 
 const tsvFiles = readdirSync(ADDITIONS_DIR).filter(f => f.endsWith('.tsv'));
 if (tsvFiles.length === 0) {
+  if (!DRY_RUN) syncTrackerDb(appContent);
   console.log('✅ No pending additions to merge.');
   process.exit(0);
 }
@@ -383,7 +399,7 @@ if (newLines.length > 0) {
 
 // Write back
 if (!DRY_RUN) {
-  writeFileSync(APPS_FILE, appLines.join('\n'));
+  syncTrackerDb(appLines.join('\n'), { rewriteMarkdown: true });
 
   // Move processed files to merged/
   if (!existsSync(MERGED_DIR)) mkdirSync(MERGED_DIR, { recursive: true });

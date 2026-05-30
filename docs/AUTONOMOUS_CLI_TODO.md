@@ -98,7 +98,7 @@ Use this section as the short planning index before expanding any individual tas
 - Add `career-ops retry-dead-letter` to reprocess failed URLs.
 - Add tests with mocked failures that succeed on retry and fail into dead-letter.
 
-### Task 10 — SQLite tracker mirror
+### Task 10 — SQLite tracker mirror — DONE
 
 - Add `lib/tracker-db.mjs` using `better-sqlite3`.
 - Define schema for applications, follow-ups, and dead-letter entries.
@@ -395,7 +395,7 @@ Use this section as the short planning index before expanding any individual tas
 
 ---
 
-## Task 9 — Retry, backoff, dead-letter queue (HARDENING)
+## Task 9 — Retry, backoff, dead-letter queue (HARDENING) — DONE
 
 **Why:** Scraping and LLM calls fail intermittently. An autonomous loop must not abort the whole batch on one flaky URL.
 
@@ -415,7 +415,7 @@ Use this section as the short planning index before expanding any individual tas
 
 ---
 
-## Task 10 — SQLite mirror of the tracker (HARDENING)
+## Task 10 — SQLite mirror of the tracker (HARDENING) — DONE
 
 **Why:** Markdown is great for AI/humans, fragile for scripts. Concurrent writers (scan + cron + manual edits) can corrupt the table.
 
@@ -473,7 +473,7 @@ Use this section as the short planning index before expanding any individual tas
 
 ---
 
-## Task 12 — Tests & CI (HARDENING)
+## Task 12 — Tests & CI (HARDENING) — DONE
 
 **Why:** Don't break the autonomous loop on refactor.
 
@@ -500,7 +500,7 @@ Use this section as the short planning index before expanding any individual tas
 - Update [docs/SETUP.md](SETUP.md) → autonomous mode section.
 - Update [docs/SCRIPTS.md](SCRIPTS.md) → entry per new script.
 - Update [CLAUDE.md](../CLAUDE.md) "Main Files" table with new files.
-- Add `docs/AUTONOMOUS.md` explaining: install → login → schedule → review.
+- Add `docs/AUTONOMOUS.md` explaining: install → login → schedule → review. — DONE
 
 ---
 

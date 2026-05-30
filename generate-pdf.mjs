@@ -15,6 +15,8 @@ import { resolve, dirname } from 'path';
 import { readFile } from 'fs/promises';
 import { mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
+import { withRetry } from './lib/retry.mjs';
+import { recordDeadLetter } from './lib/dead-letter.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -138,9 +140,12 @@ async function generatePDF() {
     const page = await browser.newPage();
 
     // Set content with file base URL for any relative resources
-    await page.setContent(html, {
+    await withRetry(() => page.setContent(html, {
       waitUntil: 'networkidle',
       baseURL: `file://${dirname(inputPath)}/`,
+    }), {
+      attempts: 2,
+      onRetry: (err, attempt, delayMs) => console.warn(`  ↻ retry ${attempt} after ${delayMs}ms: ${String(err?.message || err).split('\n')[0]}`),
     });
 
     // Wait for fonts to load
@@ -178,6 +183,11 @@ async function generatePDF() {
 }
 
 generatePDF().catch((err) => {
+  try {
+    recordDeadLetter({ source: 'pdf', url: null, error: err, attempts: err.attempts ?? 1, meta: { cv: 'cv.md' } });
+  } catch (dlqErr) {
+    console.warn(`⚠️  Could not record dead-letter entry: ${String(dlqErr?.message || dlqErr).split('\n')[0]}`);
+  }
   console.error('❌ PDF generation failed:', err.message);
   process.exit(1);
 });
