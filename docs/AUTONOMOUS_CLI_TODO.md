@@ -132,7 +132,7 @@ Use this section as the short planning index before expanding any individual tas
 
 ---
 
-## Task 1 — `bin/career-ops` unified entrypoint (MVP)
+## Task 1 — `bin/career-ops` unified entrypoint (MVP) — DONE
 
 **Why:** Today users run 19 separate `.mjs` files + a bash runner. We need one command.
 
@@ -174,7 +174,7 @@ Use this section as the short planning index before expanding any individual tas
 
 ---
 
-## Task 2 — Headless mode runner (`modes/runner.mjs`) (MVP)
+## Task 2 — Headless mode runner (`modes/runner.mjs`) (MVP) — DONE
 
 **Why:** Most "modes" in `modes/*.md` are agent prompts that today require an interactive AI CLI to interpret them. For autonomy we need to execute a mode directly via an LLM API.
 
@@ -200,7 +200,7 @@ Use this section as the short planning index before expanding any individual tas
 
 ---
 
-## Task 3 — `career-ops run` end-to-end command (MVP)
+## Task 3 — `career-ops run` end-to-end command (MVP) — DONE
 
 **Why:** The glue. One command that does scan → evaluate → PDF → tracker → verify.
 
@@ -231,7 +231,7 @@ Use this section as the short planning index before expanding any individual tas
 
 ---
 
-## Task 4 — `career-ops schedule` (MVP)
+## Task 4 — `career-ops schedule` (MVP) — DONE
 
 **Why:** Autonomy means "set it and forget it." Need scheduling without external tools.
 
@@ -253,7 +253,7 @@ Use this section as the short planning index before expanding any individual tas
 
 ---
 
-## Task 5 — Submit-review queue (HARDENING)
+## Task 5 — Submit-review queue (HARDENING) — DONE
 
 **Why:** `CLAUDE.md` forbids auto-submitting applications. For unattended runs we need an approval queue.
 
@@ -274,7 +274,7 @@ Use this section as the short planning index before expanding any individual tas
 
 ---
 
-## Task 5B — Browser application assistant: auto-fill, stop before submit (HARDENING)
+## Task 5B — Browser application assistant: auto-fill, stop before submit (HARDENING) — DONE
 
 **Why:** `career-ops apply` currently drafts answers for copy/paste. Users want the CLI to do the repetitive browser work too: open the application URL, identify fields, fill safe answers, upload the generated CV when available, and stop at the final review/submit step. This preserves the hard rule that the user makes the final submission decision.
 
@@ -317,7 +317,7 @@ Use this section as the short planning index before expanding any individual tas
 
 ---
 
-## Task 6 — Notifications (HARDENING)
+## Task 6 — Notifications (HARDENING) — DONE
 
 **Why:** No outbound channel today. Autonomous = "tell me when something interesting happened."
 
@@ -351,7 +351,7 @@ Use this section as the short planning index before expanding any individual tas
 
 ---
 
-## Task 7 — Provider config & `career-ops login` (MVP)
+## Task 7 — Provider config & `career-ops login` (MVP) — DONE
 
 **Why:** Today only `GEMINI_API_KEY` is documented. Autonomy needs multi-provider config + a sane place to store keys.
 
@@ -377,7 +377,7 @@ Use this section as the short planning index before expanding any individual tas
 
 ---
 
-## Task 8 — Structured logging (HARDENING)
+## Task 8 — Structured logging (HARDENING) — DONE
 
 **Why:** Cron/launchd runs need machine-readable logs for debugging and `schedule status`.
 
@@ -451,7 +451,7 @@ Use this section as the short planning index before expanding any individual tas
 
 ---
 
-## Task 11 — `doctor.mjs` becomes the preflight gate (HARDENING)
+## Task 11 — `doctor.mjs` becomes the preflight gate (HARDENING) — DONE
 
 **Why:** `career-ops run` should fail fast with actionable errors, not 5 minutes in.
 

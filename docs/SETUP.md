@@ -52,6 +52,37 @@ claude
 
 Then paste a job offer URL or description. Career-ops will automatically evaluate it, generate a report, create a tailored PDF, and track it.
 
+## Autonomous Mode (single CLI, no AI coding tool)
+
+You can also run the entire pipeline from the unified `career-ops` binary — no
+interactive AI CLI required for the day-to-day loop.
+
+```bash
+# Link the CLI globally (once)
+npm link
+
+# Configure an LLM backend (pick one)
+career-ops login --provider gemini                 # hosted provider, saves key to .env
+# or a free Google Colab GPU (OpenAI-compatible tunnel):
+career-ops colab set --base https://<ngrok>.ngrok-free.app --model qwen2.5:14b-instruct-q4_K_M
+career-ops colab test
+# or offline/deterministic (no key/network):
+export STUB_LLM=1
+
+# Preflight, then run end-to-end: scan → evaluate → PDF → tracker → verify → followup
+career-ops doctor
+career-ops run --dry-run                            # preview the planned steps
+career-ops run --max-jobs 3                         # real run, capped to 3 evaluations
+
+# Optional: run it on a schedule (launchd on macOS / systemd timer on Linux)
+career-ops schedule install --every 3d --max-jobs 3
+career-ops schedule status
+```
+
+High-scoring offers queue for your approval (`career-ops review list`), and the browser
+apply assistant fills forms but **never submits** (`career-ops apply <id> --browser`).
+See [AUTONOMOUS.md](AUTONOMOUS.md) for the full guide.
+
 ## Available Commands
 
 | Action | How |

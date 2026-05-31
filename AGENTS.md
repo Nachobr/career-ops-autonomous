@@ -68,6 +68,26 @@ AI-powered, CLI-agnostic job search automation: pipeline tracking, offer evaluat
 | `check-liveness.mjs` | Job posting liveness checker |
 | `liveness-core.mjs` | Shared liveness logic (expired signals win over generic Apply text) |
 | `reports/` | Evaluation reports (format: `{###}-{company-slug}-{YYYY-MM-DD}.md`). Blocks A-F + G (Posting Legitimacy). Header includes `**Legitimacy:** {tier}`. |
+| `bin/career-ops.mjs` | Unified CLI entrypoint — dispatches every subcommand (`career-ops <cmd>`) |
+| `commands/run.mjs` | `career-ops run` — end-to-end orchestrator (scan → eval → PDF → tracker → verify → followup) |
+| `commands/schedule.mjs` | `career-ops schedule` — launchd/systemd timer + foreground daemon |
+| `commands/review.mjs` | `career-ops review` — submit-review approval queue (`data/review-queue.md`) |
+| `commands/login.mjs` | `career-ops login` — configure LLM provider credentials in `.env` |
+| `commands/migrate-tracker.mjs` | `career-ops migrate-tracker` — import `applications.md` into the SQLite mirror |
+| `commands/retry-dead-letter.mjs` | `career-ops retry-dead-letter` — reprocess failures from the dead-letter queue |
+| `commands/colab.mjs` | `career-ops colab` — manage the Google Colab (LOCAL_LLM_*) backend |
+| `modes/runner.mjs` | Headless LLM executor for `modes/*.md` prompts (provider-agnostic) |
+| `modes/providers/*.mjs` | LLM provider adapters: anthropic, openai, gemini, ollama, stub |
+| `lib/retry.mjs` | `withRetry` — exponential backoff + jitter for flaky I/O |
+| `lib/dead-letter.mjs` | Dead-letter queue (`data/dead-letter.ndjson`) for exhausted retries |
+| `lib/tracker-db.mjs` | SQLite tracker mirror (WAL) — source of truth; regenerates `applications.md` |
+| `lib/logger.mjs` | Structured NDJSON run logging (`data/logs/run-<ISO>.ndjson`) |
+| `lib/notify.mjs` | Provider-neutral notifications (file/desktop/slack/discord) |
+| `merge-tracker.mjs` | Merge tracker additions; DB-first write then regenerate markdown |
+| `doctor.mjs` | Preflight gate (`--json`) for `career-ops run` |
+| `application-browser-assistant.mjs` | Browser apply assistant — fills forms, never submits |
+
+See `docs/AUTONOMOUS.md` for the full single-CLI autonomous workflow.
 
 ### First Run — Onboarding (IMPORTANT)
 
