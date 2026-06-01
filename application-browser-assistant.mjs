@@ -905,6 +905,17 @@ async function visibleSelectVerification(loc, expected) {
   }, String(expected || '')).catch((err) => ({ ok: false, error: err.message, expected: String(expected || '') }));
 }
 
+async function verifyTextValue(loc, expected) {
+  const actual = await loc.inputValue().catch(() => null);
+  if (actual == null) return { ok: false, actual: '', expected: String(expected || '') };
+  const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const a = norm(actual);
+  const e = norm(expected);
+  // Value "stuck" if the field is non-empty and matches (or contains) what we typed.
+  const ok = !!a && (a === e || a.includes(e) || e.includes(a));
+  return { ok, actual, expected: String(expected || '') };
+}
+
 async function checkControl(frame, loc, proposal) {
   const isChecked = async () => loc.isChecked().catch(() => false);
   if (await isChecked()) return true;
@@ -991,6 +1002,28 @@ async function fillPage(page, proposals, context = {}) {
         }
       }
     }
+    // Read-back verification for plain text inputs: a successful loc.fill() can
+    // still leave a controlled (React/Greenhouse) form empty after a re-render.
+    // Re-type with real keystrokes if the value didn't stick.
+    let textVerification = null;
+    const isPlainText = !p.forceFill && p.role !== 'combobox' && p.kind !== 'select' && p.kind !== 'custom-select';
+    if (ok && isPlainText) {
+      textVerification = await verifyTextValue(loc, p.value);
+      if (!textVerification.ok) {
+        method = 'press-sequentially';
+        await loc.click({ timeout: 1500 }).catch(() => {});
+        await loc.fill('').catch(() => {});
+        await loc.pressSequentially(String(p.value), { delay: 25 }).catch((err) => { error = err.message; });
+        await loc.evaluate((el) => {
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('blur', { bubbles: true }));
+        }).catch(() => {});
+        textVerification = await verifyTextValue(loc, p.value);
+        ok = textVerification.ok;
+        if (!ok && !error) error = `value did not persist (read back '${textVerification.actual}')`;
+      }
+    }
     let visibleVerification = null;
     if (ok && (p.forceFill || p.kind === 'custom-select' || p.role === 'combobox')) {
       visibleVerification = await visibleSelectVerification(loc, p.value);
@@ -1004,8 +1037,8 @@ async function fillPage(page, proposals, context = {}) {
     }
     if (ok) changed = true;
     const after = context?.opts?.debug ? await fieldState(loc) : null;
-    const needsReview = !ok || (visibleVerification && !visibleVerification.ok);
-    fillOutcome(context, { phase: 'fill', action: p.action, method, status: ok ? (needsReview ? 'needs-review' : 'ok') : 'failed', selector: p.selector, label: p.label || p.name || p.id || '', kind: p.kind, type: p.type, role: p.role, value: p.value || '', alternatives: p.alternatives || [], forceFill: !!p.forceFill, before, after, visibleVerification, error, needsReview, key: proposalKey(p) });
+    const needsReview = !ok || (visibleVerification && !visibleVerification.ok) || (textVerification && !textVerification.ok);
+    fillOutcome(context, { phase: 'fill', action: p.action, method, status: ok ? (needsReview ? 'needs-review' : 'ok') : 'failed', selector: p.selector, label: p.label || p.name || p.id || '', kind: p.kind, type: p.type, role: p.role, value: p.value || '', alternatives: p.alternatives || [], forceFill: !!p.forceFill, before, after, visibleVerification, textVerification, error, needsReview, key: proposalKey(p) });
   }
   return changed;
 }
