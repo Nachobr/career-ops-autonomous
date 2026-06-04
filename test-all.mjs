@@ -181,6 +181,15 @@ if (autoApplyDryRun && autoApplyDryRun.includes('Auto-apply active') && autoAppl
   fail('career-ops run --auto-apply dry-run did not document browser handoff safety');
 }
 
+// --apply-all turns `run` into a true single command (scan → evaluate → apply
+// the whole pending queue in the browser).
+const applyAllDryRun = run('node', ['bin/career-ops.mjs', 'run', '--dry-run', '--only=pipeline', '--apply-all', '--apply-min-score', '4.5']);
+if (applyAllDryRun && /Apply-all active/.test(applyAllDryRun) && /score ≥ 4\.5/.test(applyAllDryRun) && /Final submit remains manual/.test(applyAllDryRun) && readFile('commands/run.mjs').includes('runApplyAll')) {
+  pass('career-ops run --apply-all walks the whole pending queue and honors --apply-min-score');
+} else {
+  fail('career-ops run --apply-all dry-run/wiring check failed');
+}
+
 try {
   const loggerMod = await import(pathToFileURL(join(ROOT, 'lib', 'logger.mjs')).href);
   const tmp = mkdtempSync(join(tmpdir(), 'career-ops-logger-'));
@@ -719,6 +728,39 @@ try {
   fail(`Liveness classification tests crashed: ${e.message}`);
 }
 
+// liveness-browser.mjs is the Playwright probe required by scan --verify,
+// scan --recheck and `career-ops liveness`. It must exist and export
+// checkUrlLiveness — its absence silently broke all three before.
+const livenessBrowserSyntax = run('node', ['--check', 'liveness-browser.mjs']);
+if (livenessBrowserSyntax !== null) pass('liveness-browser.mjs syntax OK');
+else fail('liveness-browser.mjs missing or has syntax errors');
+try {
+  const lb = await import(pathToFileURL(join(ROOT, 'liveness-browser.mjs')).href);
+  if (typeof lb.checkUrlLiveness === 'function') {
+    // Guard path must not need a browser: malformed/private URLs are rejected
+    // up-front as `uncertain` with a stable guard code.
+    const bad = await lb.checkUrlLiveness(null, 'not-a-url');
+    const blocked = await lb.checkUrlLiveness(null, 'http://localhost:3000/jobs/1');
+    if (bad.result === 'uncertain' && bad.code === 'invalid_url' && blocked.code === 'blocked_host') {
+      pass('checkUrlLiveness guards malformed and private-host URLs without a browser');
+    } else {
+      fail(`checkUrlLiveness guard codes unexpected: ${JSON.stringify({ bad, blocked })}`);
+    }
+  } else {
+    fail('liveness-browser.mjs does not export checkUrlLiveness');
+  }
+} catch (e) {
+  fail(`liveness-browser.mjs import failed: ${e.message}`);
+}
+
+// scan.mjs must document and parse the backlog re-check flags.
+const scanSrc = readFile('scan.mjs');
+if (/--recheck\b/.test(scanSrc) && /parsePipelinePending/.test(scanSrc) && /removeFromPipeline/.test(scanSrc)) {
+  pass('scan.mjs exposes --recheck backlog re-verification');
+} else {
+  fail('scan.mjs missing --recheck backlog re-verification wiring');
+}
+
 // ── 4. DASHBOARD BUILD ──────────────────────────────────────────
 
 if (!QUICK) {
@@ -1000,6 +1042,33 @@ if (!fileExists(reviewFile)) {
   if (cliHelp2 && /\breview\b/.test(cliHelp2)) pass('career-ops CLI exposes `review` subcommand');
   else fail('career-ops --help does not list `review`');
 
+  // Batch apply-all is wired and short-circuits cleanly when nothing matches
+  // (impossible --min-score must never launch a browser).
+  const reviewHelp = run('node', ['bin/career-ops.mjs', 'review', '--help']);
+  const applyAllEmpty = run('node', ['bin/career-ops.mjs', 'review', 'apply-all', '--min-score', '99']);
+  if (reviewHelp && /apply-all/.test(reviewHelp) && applyAllEmpty !== null && /No actionable pending items to apply/.test(applyAllEmpty)) {
+    pass('review apply-all is documented and no-ops when no pending items match the filter');
+  } else {
+    fail('review apply-all wiring/filter failed');
+  }
+
+  // approve/apply-all document the post-browser "Did you submit?" auto-confirm
+  // flow and the --no-confirm opt-out.
+  if (reviewHelp && /--no-confirm/.test(reviewHelp) && /Did you submit\?/.test(reviewHelp)) {
+    pass('review help documents auto-confirm submission and --no-confirm opt-out');
+  } else {
+    fail('review help missing --no-confirm / auto-confirm documentation');
+  }
+
+  // prune is wired and --dry-run is non-destructive (only reports, removes nothing).
+  const pruneHelp = run('node', ['bin/career-ops.mjs', 'review', '--help']);
+  const pruneDry = run('node', ['bin/career-ops.mjs', 'review', 'prune', '--dry-run']);
+  if (pruneHelp && /prune/.test(pruneHelp) && pruneDry !== null && /(dry run|Queue is clean)/.test(pruneDry)) {
+    pass('review prune is documented and --dry-run reports without removing');
+  } else {
+    fail('review prune wiring failed');
+  }
+
   // enqueueIfQualified contract: below threshold → null, above → entry
   try {
     const { enqueueIfQualified } = await import(pathToFileURL(join(ROOT, reviewFile)).href);
@@ -1077,6 +1146,29 @@ try {
   } else {
     fail('browser assistant safe-next/final-submit detection failed');
   }
+
+  // Gated postings (Ashby/Greenhouse) hide the form behind "Apply for this
+  // Job". That button must be treated as a reveal action (clicked once when no
+  // fields are visible), not as a final submit, and never clicked once the
+  // form fields are already shown.
+  const gatedOnly = [{ kind: 'button', label: 'Apply for this Job', reveal: true, finalSubmit: false }];
+  const gatedProposals = browserApply.proposeAnswers(gatedOnly, {});
+  const revealProposal = gatedProposals.find(p => p.label === 'Apply for this Job');
+
+  const formShown = [
+    { kind: 'button', label: 'Apply for this Job', reveal: true, finalSubmit: false },
+    { kind: 'input', type: 'email', label: 'Email', id: 'email' },
+    { kind: 'button', label: 'Submit application', finalSubmit: true },
+  ];
+  const shownProposals = browserApply.proposeAnswers(formShown, {});
+  const ignoredApply = shownProposals.find(p => p.label === 'Apply for this Job');
+  const realSubmit = shownProposals.find(p => p.label === 'Submit application');
+
+  if (revealProposal?.action === 'reveal' && ignoredApply?.action === 'ignore' && realSubmit?.action === 'stop' && readFile(browserApplyFile).includes('clickReveal')) {
+    pass('browser assistant reveals gated apply forms but never treats Apply as final submit');
+  } else {
+    fail(`browser assistant reveal handling failed: ${JSON.stringify({ revealProposal: revealProposal?.action, ignoredApply: ignoredApply?.action, realSubmit: realSubmit?.action })}`);
+  }
 } catch (e) {
   fail(`browser assistant module tests failed: ${e.message}`);
 }
@@ -1088,6 +1180,17 @@ if (browserDryRun && browserDryRun.includes('Detected') && browserDryRun.include
   pass('career-ops apply --browser --dry-run detects fixture and writes audit without submitting');
 } else {
   fail('apply --browser --dry-run did not produce expected fixture output/audit');
+}
+try { if (existsSync(auditPath)) unlinkSync(auditPath); } catch {}
+
+// --confirm-submit is documented and accepted by the arg parser (it is a no-op
+// under --dry-run since no browser opens, so the run must still succeed).
+const assistantHelp = run('node', ['apply-assistant.mjs', '--browser', '--help']);
+const confirmDryRun = run('node', ['apply-assistant.mjs', '--browser', '--fixture', 'examples/apply-form-fixture.html', '--dry-run', '--confirm-submit']);
+if (assistantHelp && /--confirm-submit/.test(assistantHelp) && /exit\s*\n?\s*code 10/.test(assistantHelp) && confirmDryRun && confirmDryRun.includes('Detected')) {
+  pass('browser assistant documents --confirm-submit and accepts it without error');
+} else {
+  fail('browser assistant --confirm-submit documentation/parse failed');
 }
 try { if (existsSync(auditPath)) unlinkSync(auditPath); } catch {}
 

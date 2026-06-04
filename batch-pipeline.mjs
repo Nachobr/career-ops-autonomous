@@ -74,6 +74,30 @@ function parseScoreSummary(text) {
       }
     }
   }
+  // Fallback 2: runner-engine reports (modes/runner.mjs) strip the fenced
+  // summary and write the values into the markdown header instead, e.g.
+  //   # Evaluation: PhysicsX — Forward Deployed Software Engineer
+  //   **Score:** 4.3/5
+  //   **Archetype:** ...
+  //   **Legitimacy:** ...
+  if (!block) {
+    const headerGet = (key) => {
+      const mm = text.match(new RegExp(`(?:^|\\n)\\s*\\*{2}${key}:\\*{2}\\s*(.+)`, 'i'));
+      return mm ? mm[1].trim() : null;
+    };
+    const score = headerGet('Score');
+    if (score) {
+      const evalTitle = text.match(/^#\s*Evaluation:\s*(.+?)\s+[—–-]\s+(.+)$/m);
+      return {
+        company:    evalTitle ? evalTitle[1].trim() : null,
+        role:       evalTitle ? evalTitle[2].trim() : null,
+        score,
+        archetype:  headerGet('Archetype'),
+        legitimacy: headerGet('Legitimacy'),
+      };
+    }
+  }
+
   if (!block) return null;
 
   const get = (key) => {

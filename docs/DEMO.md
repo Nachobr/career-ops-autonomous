@@ -89,7 +89,7 @@ career-ops scan
 ## 4. The autonomous run — the headline (2–3 min)
 
 **Say:** "This is the whole thing in one command: scan → evaluate → PDF → tracker →
-verify → follow-ups."
+verify → follow-ups — and optionally straight into filling the application forms."
 
 **Run:**
 ```bash
@@ -104,6 +104,25 @@ career-ops run --max-jobs 1              # real, capped to 1 eval so it's fast o
 - A new evaluation report in `reports/`, a tailored **ATS PDF** in `output/`.
 - `verify` ends with **🟢 Pipeline is clean**.
 - The per-run log: `data/logs/run-<ISO>.ndjson` (mention `latest.ndjson`).
+
+### 4b. One command, end to end — including the apply step ⭐
+
+**Say:** "The whole point: you don't chain ten commands. One command goes from
+scanning portals all the way to opening the browser on each high-fit job and
+filling the form — stopping before submit."
+
+**Run:**
+```bash
+career-ops run --apply-all --apply-min-score 4.5   # scan → evaluate → apply, in one
+```
+
+**Point out:**
+- After the pipeline, it walks **every pending queue item** in the browser.
+- Dead/delisted entries are skipped automatically.
+- Ctrl+C advances to the next job; Ctrl+C twice aborts the batch.
+- Still **never** clicks final submit — you stay in control.
+- For unattended/scheduled runs use `--auto-apply` instead (only the items newly
+  queued in that run, capped by `--auto-apply-limit`).
 
 ---
 
@@ -227,7 +246,7 @@ cd dashboard && go build -o career-dashboard . && ./career-dashboard --path ..
 node test-all.mjs --quick
 ```
 
-**Point out:** **141 tests, 0 failures**, no network/keys required (stub provider), CI
+**Point out:** **149 tests, 0 failures**, no network/keys required (stub provider), CI
 runs on Node 20 + 22.
 
 ---
@@ -241,21 +260,30 @@ runs on Node 20 + 22.
 
 ---
 
-## Quick reference — full demo in copy-paste order
+## Quick reference
 
+**The one command (what it's all about):**
+```bash
+career-ops run --apply-all          # scan → evaluate → PDF → tracker → verify → apply
+```
+Everything below is just for *showing the pieces* during the demo — day to day you
+only need the line above.
+
+**Full demo in copy-paste order:**
 ```bash
 career-ops --help
 career-ops doctor
-career-ops scan
-career-ops run --dry-run
-career-ops run --max-jobs 1
+career-ops scan                     # discovery only
+career-ops scan --recheck --recheck-limit 20   # drop delisted jobs from the backlog
+career-ops run --dry-run            # show the plan
+career-ops run --max-jobs 1         # one eval, fast on stage
 career-ops tracker
 career-ops tracker export --format=md | head -6
 career-ops verify
 career-ops review list
 career-ops retry-dead-letter --list
-career-ops apply <id> --browser --dry-run
-career-ops apply <id> --browser
+career-ops apply <id> --browser --dry-run    # zoom in on the apply step
+career-ops run --apply-all          # the headline: full cycle incl. browser apply
 career-ops schedule status
 node test-all.mjs --quick
 ```

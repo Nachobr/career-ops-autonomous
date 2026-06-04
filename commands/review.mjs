@@ -186,6 +186,23 @@ function reportLinkForNum(reportNum) {
   return file ? `[${padded}](reports/${file})` : '';
 }
 
+// Resolve the apply URL for a queue row: prefer the stored URL, otherwise read
+// **URL:** from the linked report file. Returns '' when neither is available
+// (e.g. legacy rows enqueued before URLs were stored, whose report file has
+// since been deleted) — such rows can never be opened in the browser.
+function resolveQueueUrl(row) {
+  if (row.url && row.url !== '-' && /^https?:\/\//i.test(row.url)) return row.url;
+  const m = row.report && row.report.match(/\((reports\/[^)]+)\)/);
+  if (m) {
+    const p = join(ROOT, m[1]);
+    if (existsSync(p)) {
+      const um = readFileSync(p, 'utf-8').match(/^\*\*URL:\*\*\s*(\S+)/m);
+      if (um && /^https?:\/\//i.test(um[1])) return um[1];
+    }
+  }
+  return '';
+}
+
 // ── Subcommand impls ────────────────────────────────────────────
 
 function cmdList(filter) {
@@ -283,6 +300,11 @@ function cmdApprove(id, opts = {}) {
   else if (row.company && row.company !== 'Unknown') args.push('--company', row.company);
   if (url) args.push('--url', url);
   if (opts.browser) args.push('--browser');
+  // In a real (non-dry) browser run, ask the user whether they submitted once
+  // they close the window — the assistant signals "yes" with exit code 10 so we
+  // can flip the queue + tracker to Applied without a separate manual command.
+  const wantConfirm = opts.browser && opts.confirmSubmit !== false && !(Array.isArray(opts.forwardArgs) && opts.forwardArgs.includes('--dry-run'));
+  if (wantConfirm) args.push('--confirm-submit');
   if (Array.isArray(opts.forwardArgs)) args.push(...opts.forwardArgs);
 
   const child = spawn(process.execPath, [PATHS.applyScript, ...args], {
@@ -291,21 +313,126 @@ function cmdApprove(id, opts = {}) {
     env: process.env,
   });
   return new Promise((resolve) => {
-    child.on('exit', (code) => resolve(code ?? 0));
+    child.on('exit', (code) => {
+      // Exit code 10 = user confirmed they submitted this application.
+      if (code === 10) {
+        const res = markSubmitted(id, `Submitted via apply assistant ${new Date().toISOString().slice(0, 10)}`);
+        if (res.found) {
+          console.log(green(`✔ ${id} marked submitted`) + (res.trackerUpdated ? green('  · tracker → Applied') : dim('  · tracker row not found')));
+        }
+        return resolve(0);
+      }
+      resolve(code ?? 0);
+    });
     child.on('error', (e) => { console.error(`apply-assistant failed: ${e.message}`); resolve(1); });
   });
 }
 
-function cmdSubmitted(id) {
+async function cmdApplyAll(opts = {}) {
+  let pending = readQueue().filter(r => r.status === 'pending');
+
+  if (opts.minScore != null) {
+    pending = pending.filter(r => parseScoreNumber(r.score) >= opts.minScore);
+  }
+
+  // Legacy rows with no stored URL whose report file was deleted can never be
+  // opened — partition them out so the batch goes straight to actionable jobs
+  // instead of printing a multi-line error for every dead entry.
+  const dead = pending.filter(r => !resolveQueueUrl(r));
+  let actionable = pending.filter(r => resolveQueueUrl(r));
+
+  if (opts.limit != null) {
+    actionable = actionable.slice(0, opts.limit);
+  }
+
+  if (dead.length) {
+    console.log(dim(`Skipping ${dead.length} unusable item(s) (no URL, report missing). Clear them with: career-ops review prune`));
+  }
+
+  if (actionable.length === 0) {
+    console.log(yellow('No actionable pending items to apply.'));
+    return 0;
+  }
+
+  const pending2 = actionable;
+  console.log(bold(`\n▶ Batch apply: ${pending2.length} pending item(s)`)
+    + (opts.minScore != null ? dim(`  (score ≥ ${opts.minScore})`) : ''));
+  console.log(yellow('Safety: the assistant fills safe fields and uploads your CV, but never clicks final submit.'));
+  console.log(dim('For each job: review/submit in the browser, then press Ctrl+C to advance to the next.'));
+  console.log(dim('Press Ctrl+C twice within ~1.5s to abort the whole batch.\n'));
+
+  // The apply-assistant child handles its own Ctrl+C (closes the browser and
+  // exits). Keep this parent process alive on that signal so the batch can
+  // advance; a quick double Ctrl+C aborts the remaining items.
+  let lastSigint = 0;
+  let aborted = false;
+  const onSigint = () => {
+    const now = Date.now();
+    if (now - lastSigint < 1500) aborted = true;
+    lastSigint = now;
+  };
+  process.on('SIGINT', onSigint);
+
+  let opened = 0;
+  let skipped = 0;
+  try {
+    for (let i = 0; i < pending2.length; i++) {
+      if (aborted) { console.log(yellow('\n■ Batch aborted by user.')); break; }
+      const row = pending2[i];
+      console.log(cyan(`\n[${i + 1}/${pending2.length}] ${row.id}  ${row.score}  ${row.company} — ${row.role}`));
+      const code = await cmdApprove(row.id, { browser: true, confirmSubmit: opts.confirmSubmit !== false, forwardArgs: opts.forwardArgs || [] });
+      if (code === 0) opened++;
+      else { skipped++; console.log(yellow(`↷ skipped ${row.id} (see message above)`)); }
+    }
+  } finally {
+    process.removeListener('SIGINT', onSigint);
+  }
+
+  console.log(bold(`\n✔ Batch complete: ${opened} opened, ${skipped} skipped of ${pending2.length}.`));
+  console.log(dim('Jobs you confirmed submitted were marked automatically. To mark others: career-ops review submitted <id>'));
+  return 0;
+}
+
+function cmdPrune(opts = {}) {
+  const rows = readQueue();
+  const dead = rows.filter(r => r.status === 'pending' && !resolveQueueUrl(r));
+  if (dead.length === 0) {
+    console.log(green('Queue is clean — no unusable pending entries.'));
+    return 0;
+  }
+  console.log(bold(`Found ${dead.length} unusable pending entr${dead.length === 1 ? 'y' : 'ies'} (no URL, report file missing):`));
+  for (const r of dead) console.log(dim(`  ${r.id}  ${r.score}  ${r.company} — ${r.role}`));
+  if (opts.dryRun) {
+    console.log(dim('\n(dry run — nothing removed. Re-run without --dry-run to remove them.)'));
+    return 0;
+  }
+  const deadIds = new Set(dead.map(r => r.id));
+  writeQueue(rows.filter(r => !deadIds.has(r.id)));
+  console.log(green(`\n✔ Removed ${dead.length} unusable entr${dead.length === 1 ? 'y' : 'ies'} from the queue.`));
+  console.log(dim('They will be re-queued automatically if the pipeline re-evaluates those jobs.'));
+  return 0;
+}
+
+// Transition a queue row to `submitted` and flip its tracker row to Applied.
+// Returns { ok, found, trackerUpdated } so callers can report precisely.
+function markSubmitted(id, note) {
   const rows = readQueue();
   const i = rows.findIndex(r => r.id === id);
-  if (i === -1) { console.error(`No queue entry: ${id}`); return 1; }
+  if (i === -1) return { ok: false, found: false, trackerUpdated: false };
   const row = rows[i];
-  rows[i] = { ...row, status: 'submitted' };
-  writeQueue(rows);
-  const updated = setTrackerStatus(row.report, 'Applied', `Submitted manually ${new Date().toISOString().slice(0, 10)}`);
-  console.log(green(`✔ Marked ${id} as submitted`) + (updated ? green('  · tracker updated → Applied') : dim('  · tracker row not found')));
-  return updated ? 0 : 1;
+  if (row.status !== 'submitted') {
+    rows[i] = { ...row, status: 'submitted' };
+    writeQueue(rows);
+  }
+  const trackerUpdated = setTrackerStatus(row.report, 'Applied', note || `Submitted ${new Date().toISOString().slice(0, 10)}`);
+  return { ok: true, found: true, trackerUpdated, row };
+}
+
+function cmdSubmitted(id) {
+  const res = markSubmitted(id, `Submitted manually ${new Date().toISOString().slice(0, 10)}`);
+  if (!res.found) { console.error(`No queue entry: ${id}`); return 1; }
+  console.log(green(`✔ Marked ${id} as submitted`) + (res.trackerUpdated ? green('  · tracker updated → Applied') : dim('  · tracker row not found')));
+  return res.trackerUpdated ? 0 : 1;
 }
 
 function cmdReject(id, reason) {
@@ -353,7 +480,9 @@ function printHelp() {
 USAGE
   career-ops review list      [--pending|--approved|--rejected|--all]
   career-ops review show      <id>
-  career-ops review approve   <id> [--browser] [apply flags]
+  career-ops review approve   <id> [--browser] [--no-confirm] [apply flags]
+  career-ops review apply-all  [--min-score N] [--limit N] [--no-confirm] [apply flags]
+  career-ops review prune     [--dry-run]
   career-ops review submitted <id>
   career-ops review reject    <id> [--reason "..."]
   career-ops review enqueue   <reportNum>
@@ -363,8 +492,20 @@ The pipeline enqueues evaluations scoring ≥ review.apply_threshold
 on your behalf — \`approve\` launches apply-assistant.mjs which only
 DRAFTS answers. Use \`--browser\` to fill safe fields and stop before submit.
 Browser apply flags such as \`--llm-answer-tokens 300\` are forwarded.
-After you manually submit in the browser, run \`career-ops review submitted <id>\`
-to mark the queue and tracker as Applied.
+After you close the browser, \`--browser\` runs ask "Did you submit?" and,
+if you confirm, flip the queue row to \`submitted\` and the tracker to Applied
+automatically. Pass \`--no-confirm\` to skip that prompt, then mark it later
+with \`career-ops review submitted <id>\`.
+
+\`apply-all\` walks every pending item in turn, opening the browser
+form-filler for each (newest queue order). Review/submit each one, then
+press Ctrl+C to advance to the next; press Ctrl+C twice quickly to abort.
+Filter with \`--min-score 4.5\` or cap the run with \`--limit 10\`.
+Items with no URL and a missing report are skipped automatically.
+
+\`prune\` removes pending entries that can never be applied (no stored URL
+and their report file is gone — typically legacy rows). Use \`--dry-run\`
+to preview first.
 `);
 }
 
@@ -391,7 +532,29 @@ export default async function main(argv = []) {
   }
 
   if (sub === 'show')     return cmdShow(rest[0]);
-  if (sub === 'approve')  return cmdApprove(rest[0], { browser: rest.includes('--browser'), forwardArgs: rest.slice(1).filter(a => a !== '--browser') });
+  if (sub === 'approve')  return cmdApprove(rest[0], {
+    browser: rest.includes('--browser'),
+    confirmSubmit: !rest.includes('--no-confirm'),
+    forwardArgs: rest.slice(1).filter(a => a !== '--browser' && a !== '--no-confirm'),
+  });
+  if (sub === 'apply-all' || sub === 'apply-pending') {
+    const numFlag = (name) => {
+      const i = rest.indexOf(name);
+      if (i === -1) return null;
+      const v = parseFloat(rest[i + 1]);
+      return Number.isFinite(v) ? v : null;
+    };
+    const minScore = numFlag('--min-score');
+    const limit = numFlag('--limit');
+    const consumed = new Set(['--min-score', '--limit']);
+    const forwardArgs = rest.filter((a, i) => {
+      if (consumed.has(a)) return false;
+      if (consumed.has(rest[i - 1])) return false;
+      return a !== '--browser' && a !== '--no-confirm';
+    });
+    return cmdApplyAll({ minScore, limit, confirmSubmit: !rest.includes('--no-confirm'), forwardArgs });
+  }
+  if (sub === 'prune')    return cmdPrune({ dryRun: rest.includes('--dry-run') });
   if (sub === 'submitted') return cmdSubmitted(rest[0]);
   if (sub === 'reject') {
     const id = rest[0];

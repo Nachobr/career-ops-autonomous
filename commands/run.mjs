@@ -199,6 +199,27 @@ function spawnReviewApproveBrowser(row) {
   });
 }
 
+// --apply-all: after the pipeline, hand off to `review apply-all` which walks
+// the ENTIRE pending review queue in the browser (auto-skipping dead entries),
+// so a single `career-ops run --apply-all` covers scan → evaluate → apply.
+function runApplyAll(opts) {
+  return new Promise((resolveP) => {
+    const started = Date.now();
+    const args = [join(ROOT, 'bin', 'career-ops.mjs'), 'review', 'apply-all'];
+    if (opts.applyMinScore != null && Number.isFinite(opts.applyMinScore)) {
+      args.push('--min-score', String(opts.applyMinScore));
+    }
+    console.log(`\n${bold('▶ apply-all')} ${dim('(review apply-all — browser walk of the pending queue)')}`);
+    const child = spawn(process.execPath, args, { cwd: ROOT, stdio: 'inherit', env: process.env });
+    child.on('exit', (code, signal) => {
+      const ms = Date.now() - started;
+      if (signal) return resolveP({ status: 'failed', code: 1, ms, reason: `signal ${signal}` });
+      return resolveP({ status: code === 0 ? 'ok' : 'failed', code: code ?? 1, ms });
+    });
+    child.on('error', (err) => resolveP({ status: 'failed', code: 1, reason: err.message }));
+  });
+}
+
 async function runAutoApply(beforeQueueIds, opts) {
   const rows = readReviewQueueRows();
   const candidates = rows.filter((row) => row.status === 'pending' && !beforeQueueIds.has(row.id));
@@ -247,14 +268,17 @@ function parseArgs(argv) {
     llmKey: null,
     autoApply: false,
     autoApplyLimit: 1,
+    applyAll: false,
+    applyMinScore: null,
   };
-  const SEP_FLAGS = new Set(['--max-jobs', '--llm-base', '--llm-model', '--llm-key', '--engine', '--only', '--skip', '--auto-apply-limit']);
+  const SEP_FLAGS = new Set(['--max-jobs', '--llm-base', '--llm-model', '--llm-key', '--engine', '--only', '--skip', '--auto-apply-limit', '--apply-min-score']);
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--dry-run') opts.dryRun = true;
     else if (arg === '--all') opts.all = true;
     else if (arg === '--auto-apply') opts.autoApply = true;
+    else if (arg === '--apply-all') opts.applyAll = true;
     else if (arg === '--no-notify') opts.notify = false;
     else if (arg === '--no-alerts') opts.noAlerts = true;
     else if (arg === '--help' || arg === '-h') opts.help = true;
@@ -276,6 +300,8 @@ function parseArgs(argv) {
       opts.llmKey = arg.slice('--llm-key='.length);
     } else if (arg.startsWith('--auto-apply-limit=')) {
       opts.autoApplyLimit = parseInt(arg.slice('--auto-apply-limit='.length), 10);
+    } else if (arg.startsWith('--apply-min-score=')) {
+      opts.applyMinScore = parseFloat(arg.slice('--apply-min-score='.length));
     } else if (SEP_FLAGS.has(arg) && argv[i + 1] != null) {
       const v = argv[++i];
       if (arg === '--max-jobs')  opts.maxJobs = parseInt(v, 10);
@@ -286,6 +312,7 @@ function parseArgs(argv) {
       else if (arg === '--only')      opts.only = new Set(v.split(',').map(s => s.trim()).filter(Boolean));
       else if (arg === '--skip') { for (const s of v.split(',')) if (s.trim()) opts.skip.add(s.trim()); }
       else if (arg === '--auto-apply-limit') opts.autoApplyLimit = parseInt(v, 10);
+      else if (arg === '--apply-min-score') opts.applyMinScore = parseFloat(v);
     } else if (arg.startsWith('-')) {
       console.error(`career-ops run: unknown flag '${arg}'`);
       opts.invalid = true;
@@ -438,6 +465,11 @@ ${bold('Flags:')}
                            It never clicks final submit.
   --auto-apply-limit N     Max new queued jobs to open with --auto-apply
                            (default: 1; each browser waits for your review).
+  --apply-all              After a successful run, walk the ENTIRE pending review
+                           queue in the browser (scan → evaluate → apply in one
+                           command). Dead entries are skipped; Ctrl+C advances to
+                           the next, Ctrl+C twice aborts. Never clicks submit.
+  --apply-min-score N      With --apply-all, only open jobs scoring ≥ N.
   --engine=runner|claude   Evaluation engine for the pipeline step (default: runner).
                            Passed via CAREER_OPS_ENGINE env var.
   --no-notify              Suppress final summary block.
@@ -451,6 +483,8 @@ ${bold('Examples:')}
   career-ops run --dry-run
   career-ops run --max-jobs 3
   career-ops run --max-jobs 1 --auto-apply
+  career-ops run --apply-all                  # full cycle: scan → evaluate → apply
+  career-ops run --apply-all --apply-min-score 4.5
   career-ops run --only=scan,liveness
   career-ops run --skip=pdf,liveness
 `);
@@ -499,7 +533,9 @@ export default async function run(argv) {
   if (runsPipeline && !skipsPipeline && !opts.all) {
     console.log(yellow(`Safety cap active: will evaluate at most ${opts.maxJobs} job(s). Use --all to override.`));
   }
-  if (opts.autoApply) {
+  if (opts.applyAll) {
+    console.log(yellow(`Apply-all active: after success, open the browser for EVERY pending queue item${opts.applyMinScore != null ? ` (score ≥ ${opts.applyMinScore})` : ''}. Final submit remains manual.`));
+  } else if (opts.autoApply) {
     console.log(yellow(`Auto-apply active: after success, open browser for up to ${opts.autoApplyLimit} newly queued high-fit job(s). Final submit remains manual.`));
   }
   for (const s of steps) {
@@ -591,7 +627,15 @@ export default async function run(argv) {
       }
     }
 
-    if (!aborted && opts.autoApply) {
+    if (!aborted && opts.applyAll) {
+      // --apply-all is a superset of --auto-apply (whole queue vs. just the
+      // newly-queued items), so run it instead of, not in addition to.
+      const applyAllResult = await runApplyAll(opts);
+      results.push({ name: 'apply-all', script: 'commands/review.mjs', ...applyAllResult });
+      if (applyAllResult.status === 'failed') {
+        console.log(yellow(`⚠ apply-all failed (exit ${applyAllResult.code}) (optional, continuing)`));
+      }
+    } else if (!aborted && opts.autoApply) {
       const autoApplyResult = await runAutoApply(beforeQueueIds, opts);
       results.push({ name: 'auto-apply', script: 'commands/review.mjs', ...autoApplyResult });
       if (autoApplyResult.status === 'failed') {

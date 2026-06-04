@@ -12,6 +12,7 @@ import { chromium } from 'playwright';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'fs';
 import { dirname, join, resolve, basename } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
+import { createInterface } from 'readline';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 
@@ -181,7 +182,9 @@ export function detectFieldsFromHtml(html) {
   for (const m of String(html).matchAll(/<(button)\b([^>]*)>([\s\S]*?)<\/button>|<input\b([^>]*type\s*=\s*['"]?submit[^>]*)>/gi)) {
     const tag = m[2] || m[4] || '';
     const label = stripTags(m[3] || attr(tag, 'value') || attr(tag, 'aria-label') || 'Submit');
-    fields.push({ kind: 'button', type: 'button', id: attr(tag, 'id'), name: attr(tag, 'name'), label, finalSubmit: isFinalSubmitLabel(label), safeNext: SAFE_NEXT_RE.test(label) && !isFinalSubmitLabel(label) });
+    const finalSubmit = isFinalSubmitLabel(label);
+    const reveal = !finalSubmit && APPLY_RE.test(label);
+    fields.push({ kind: 'button', type: 'button', id: attr(tag, 'id'), name: attr(tag, 'name'), label, finalSubmit, reveal, safeNext: SAFE_NEXT_RE.test(label) && !finalSubmit && !reveal });
   }
   return fields;
 }
@@ -191,7 +194,7 @@ export function isFinalSubmitLabel(label) {
 }
 
 function parseArgs(argv) {
-  const opts = { target: null, report: null, company: null, url: null, fixture: null, resume: null, coverLetter: null, dryRun: false, browser: true, llmAnswers: null, llmAnswerTokens: 700, debug: false, help: false };
+  const opts = { target: null, report: null, company: null, url: null, fixture: null, resume: null, coverLetter: null, dryRun: false, browser: true, llmAnswers: null, llmAnswerTokens: 700, debug: false, help: false, confirmSubmit: false };
   const valueFlags = new Set(['--report', '--company', '--url', '--fixture', '--resume', '--cover-letter', '--llm-answer-tokens']);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -199,6 +202,7 @@ function parseArgs(argv) {
     else if (a === '--dry-run') opts.dryRun = true;
     else if (a === '--debug') opts.debug = true;
     else if (a === '--browser') opts.browser = true;
+    else if (a === '--confirm-submit') opts.confirmSubmit = true;
     else if (a === '--llm-answers') opts.llmAnswers = true;
     else if (a === '--no-llm-answers') opts.llmAnswers = false;
     else if (a === '--llm-answer-tokens' && argv[i + 1]) opts.llmAnswerTokens = parseInt(argv[++i], 10);
@@ -236,6 +240,8 @@ Flags:
   --no-llm-answers   Disable LLM drafting; use deterministic fallback text.
   --llm-answer-tokens <n> Token cap for free-text answer drafting (default: 700).
   --debug            Print fill attempts and write a debug JSON audit.
+  --confirm-submit   After you close the browser, ask "Did you submit?" — exit
+                     code 10 means yes (used by \`review\` to mark Applied).
   --dry-run          Detect and propose only; no browser and no page changes.
 
 In real browser mode, LLM free-text drafting is enabled automatically when
@@ -389,10 +395,21 @@ export function proposeAnswers(fields, { profile = {}, report = {}, reportConten
     return `I’m interested in ${role} because it matches the kind of work I enjoy most: building practical AI/software products end to end, collaborating across product and engineering, and turning ambiguous ideas into usable systems. My background in full-stack development, AI workflows, and product-minded execution would let me contribute quickly while continuing to learn from the team.`;
   };
 
+  // A gated posting (e.g. Ashby/Greenhouse) shows the job description plus an
+  // "Apply for this Job" button, and only reveals the real form fields after
+  // it is clicked. Detect whether any fillable field is already present so we
+  // only click the reveal button when the form is still hidden.
+  const hasFillableField = fields.some(f => f.kind && f.kind !== 'button');
+
   return fields.map(field => {
     if (field.kind === 'button') {
       if (field.finalSubmit) return { ...field, action: 'stop', value: '', reason: 'final submit button detected — never clicked' };
       if (field.safeNext) return { ...field, action: 'next', value: '', reason: 'safe navigation button; clicked only to reveal the next form step' };
+      if (field.reveal) {
+        return hasFillableField
+          ? { ...field, action: 'ignore', value: '', reason: 'apply button ignored — form fields are already visible' }
+          : { ...field, action: 'reveal', value: '', reason: 'apply button clicked once to reveal the gated application form' };
+      }
       return { ...field, action: 'ignore', value: '', reason: 'button ignored' };
     }
     const label = `${field.label || ''} ${field.name || ''} ${field.id || ''}`;
@@ -772,8 +789,13 @@ async function detectFieldsFromPage(page) {
       if (!isVisible(el)) continue;
       const label = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim();
       const appContext = appContextFor(el);
-      const finalSubmit = finalRe.test(label) || (appContext && applyRe.test(label));
-      fields.push({ kind: 'button', type: 'button', id: el.id || '', name: el.name || '', label, finalSubmit, safeNext: /\b(next|continue|save and continue)\b/i.test(label) && !finalSubmit, selector: cssPath(el), frameIndex });
+      const finalSubmit = finalRe.test(label);
+      // "Apply" / "Apply for this Job" on a job posting opens (reveals) the
+      // gated application form — it is NOT the final submit. We may click it
+      // once, but only when no fillable fields are visible yet (see
+      // proposeAnswers), so single-page forms are never submitted by accident.
+      const reveal = !finalSubmit && appContext && applyRe.test(label);
+      fields.push({ kind: 'button', type: 'button', id: el.id || '', name: el.name || '', label, finalSubmit, reveal, safeNext: /\b(next|continue|save and continue)\b/i.test(label) && !finalSubmit && !reveal, selector: cssPath(el), frameIndex });
     }
     return fields;
   }, { frameIndex }).catch(() => []);
@@ -1075,6 +1097,20 @@ async function clickSafeNext(page, proposals) {
   return true;
 }
 
+async function clickReveal(page, proposals) {
+  const frames = page.frames();
+  const candidate = proposals.find(p => p.action === 'reveal' && p.reveal && !p.finalSubmit && p.selector);
+  if (!candidate) return false;
+  const frame = Number.isInteger(candidate.frameIndex) ? frames[candidate.frameIndex] : page.mainFrame();
+  if (!frame) return false;
+  const loc = frame.locator(candidate.selector).first();
+  if (await loc.count() === 0) return false;
+  await loc.click({ timeout: 3000 }).catch(() => {});
+  await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => {});
+  await page.waitForTimeout(1200);
+  return true;
+}
+
 function proposalKey(p) {
   return [p.frameIndex ?? '', p.selector || '', p.kind || '', p.type || '', p.label || '', p.optionLabel || '', p.action || ''].join('|');
 }
@@ -1099,6 +1135,11 @@ async function fillApplicationFlow(page, context) {
     }
 
     await fillPage(page, proposals, context);
+    // A gated posting only shows an "Apply" button on the first view. Click it
+    // once to reveal the real form, then re-detect on the next iteration before
+    // deciding anything about final submit / navigation.
+    const revealed = await clickReveal(page, proposals);
+    if (revealed) continue;
     const hasFinalSubmit = proposals.some(p => p.action === 'stop');
     if (hasFinalSubmit) break;
     const advanced = await clickSafeNext(page, proposals);
@@ -1116,6 +1157,89 @@ function waitForUserExit(browser) {
     process.once('SIGINT', done);
     process.once('SIGTERM', done);
   });
+}
+
+// Ask, on the terminal, whether the user actually submitted the application.
+// Returns true only on an explicit yes. Falls back to false when there is no
+// interactive TTY (e.g. piped/CI runs) so automated callers never block.
+function promptSubmitted() {
+  return new Promise((resolveP) => {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) { resolveP(false); return; }
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question('\nDid you submit this application? [y/N] ', (answer) => {
+      rl.close();
+      resolveP(/^\s*y(es)?\s*$/i.test(answer || ''));
+    });
+  });
+}
+
+// Launch a browser that anti-bot services (Cloudflare, PerimeterX, …) are far
+// less likely to flag. Three things matter:
+//   1. Use the real installed Chrome (`channel: 'chrome'`) instead of
+//      Playwright's bundled Chromium, which has a HeadlessChrome-like
+//      fingerprint even when run headed.
+//   2. Use a persistent profile so a security challenge solved once leaves its
+//      clearance cookie behind — subsequent runs on the same site skip it.
+//   3. Strip the obvious automation tells (`navigator.webdriver`, the
+//      `--enable-automation` switch, the "controlled by automated software"
+//      infobar).
+// Returns a { browser, page } pair; `browser` is a persistent BrowserContext,
+// which exposes the same `.close()` used by waitForUserExit.
+async function launchHardenedBrowser() {
+  const profileDir = join(ROOT, 'output', '.browser-profile');
+  mkdirSync(profileDir, { recursive: true });
+  const launchOpts = {
+    headless: false,
+    viewport: null,
+    locale: 'en-US',
+    args: ['--disable-blink-features=AutomationControlled'],
+    ignoreDefaultArgs: ['--enable-automation'],
+  };
+  let context;
+  let usedChannel = 'chromium';
+  try {
+    context = await chromium.launchPersistentContext(profileDir, { ...launchOpts, channel: 'chrome' });
+    usedChannel = 'chrome';
+  } catch {
+    // Real Chrome not installed — fall back to bundled Chromium (more likely
+    // to be challenged, but still works for sites without bot protection).
+    context = await chromium.launchPersistentContext(profileDir, launchOpts);
+  }
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  });
+  const page = context.pages()[0] || await context.newPage();
+  return { browser: context, page, usedChannel };
+}
+
+// Heuristic detection of an interstitial bot/security challenge (Cloudflare
+// "Checking your browser" / "Verificación de seguridad", hCaptcha, reCAPTCHA).
+// We look at the visible text and known challenge widgets/iframes.
+const CHALLENGE_TEXT_RE = /\b(verificaci[oó]n de seguridad|checking your browser|verifying you are human|verify you are (a )?human|just a moment|please (wait|stand by) while|attention required|security check|are you a robot|complete the security check)\b/i;
+async function looksLikeBotChallenge(page) {
+  try {
+    const hit = await page.evaluate((reSrc) => {
+      const re = new RegExp(reSrc, 'i');
+      const text = (document.body?.innerText || '').slice(0, 4000);
+      if (re.test(text)) return true;
+      const widget = document.querySelector(
+        '#challenge-form, #cf-challenge-running, .cf-turnstile, [class*="turnstile" i], iframe[src*="challenges.cloudflare.com" i], iframe[src*="hcaptcha.com" i], iframe[src*="recaptcha" i], iframe[title*="challenge" i]'
+      );
+      return !!widget;
+    }, CHALLENGE_TEXT_RE.source);
+    return !!hit;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForChallengeToClear(page, timeoutMs = 120000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(2000);
+    if (!(await looksLikeBotChallenge(page))) return true;
+  }
+  return !(await looksLikeBotChallenge(page));
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -1146,12 +1270,25 @@ export async function main(argv = process.argv.slice(2)) {
     debugEvent(context, { phase: 'propose', step: 1, proposalCount: proposals.length, proposals });
   } else {
     if (!targetUrl && !opts.fixture) throw new Error('browser mode needs a URL or --fixture');
-    browser = await chromium.launch({ headless: false });
-    page = await browser.newPage();
+    let usedChannel;
+    ({ browser, page, usedChannel } = await launchHardenedBrowser());
+    if (usedChannel !== 'chrome') {
+      console.log('Note: real Chrome not found — using bundled Chromium, which some sites flag as a bot.');
+      console.log('      Install Google Chrome (or run `npx playwright install chrome`) for best results.');
+    }
     const url = opts.fixture ? pathToFileURL(resolve(opts.fixture)).href : targetUrl;
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
     await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1500);
+    if (await looksLikeBotChallenge(page)) {
+      console.log('\n⚠ Security / bot check detected on this page.');
+      console.log('  Solve it manually in the browser window (checkbox / puzzle).');
+      console.log('  Your session is saved to output/.browser-profile, so you usually');
+      console.log('  will not be challenged again on this site.');
+      console.log('  Waiting up to 120s for the challenge to clear…');
+      const cleared = await waitForChallengeToClear(page, 120000);
+      console.log(cleared ? '  ✓ Challenge cleared — continuing.' : '  ⏱ Still challenged after 120s — continuing anyway; fill may be partial.');
+    }
     ({ fields, proposals } = await fillApplicationFlow(page, context));
   }
 
@@ -1183,7 +1320,15 @@ export async function main(argv = process.argv.slice(2)) {
   console.log('\nReview the application in the browser. I will not submit it for you. Click submit manually if everything is correct.');
   if (!opts.dryRun && browser) {
     console.log('Leave this process running while you review; press Ctrl+C when done.');
-    return waitForUserExit(browser);
+    await waitForUserExit(browser);
+    // After the window closes, optionally ask whether the user submitted so the
+    // caller (review.mjs) can flip the queue + tracker to Applied. Exit code 10
+    // = confirmed submitted; anything else = not submitted / unknown.
+    if (opts.confirmSubmit) {
+      const submitted = await promptSubmitted();
+      return submitted ? 10 : 0;
+    }
+    return 0;
   }
   return 0;
 }

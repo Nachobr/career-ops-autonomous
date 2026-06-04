@@ -24,6 +24,8 @@
  *   node scan.mjs --dry-run        # preview without writing files
  *   node scan.mjs --company Cohere # scan a single company
  *   node scan.mjs --verify         # Playwright-check each new URL; drop expired postings
+ *   node scan.mjs --recheck        # re-verify already-scanned pending jobs; drop delisted ones
+ *   node scan.mjs --recheck --recheck-limit 50   # cap the re-check at 50 postings
  */
 
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, readdirSync } from 'fs';
@@ -250,6 +252,36 @@ function appendToScanHistory(offers, date, status = 'added') {
   appendFileSync(SCAN_HISTORY_PATH, lines, 'utf-8');
 }
 
+// ── Pipeline backlog re-check helpers ───────────────────────────────
+
+// Parse the still-pending ("- [ ]") job rows from pipeline.md into offer
+// objects so --recheck can re-verify postings we scanned earlier but have not
+// processed yet. Processed ("- [x]") rows are left untouched.
+function parsePipelinePending() {
+  if (!existsSync(PIPELINE_PATH)) return [];
+  const text = readFileSync(PIPELINE_PATH, 'utf-8');
+  const offers = [];
+  for (const m of text.matchAll(/^- \[ \] (https?:\/\/\S+)\s*\|\s*([^|]+?)\s*\|\s*(.+?)\s*$/gm)) {
+    offers.push({ url: m[1], company: m[2].trim(), title: m[3].trim(), source: 'recheck' });
+  }
+  return offers;
+}
+
+// Remove pipeline rows (checked or unchecked) whose URL is in `urls`. Used to
+// drop postings confirmed delisted during --recheck.
+function removeFromPipeline(urls) {
+  if (!existsSync(PIPELINE_PATH) || urls.size === 0) return 0;
+  const text = readFileSync(PIPELINE_PATH, 'utf-8');
+  let removed = 0;
+  const kept = text.split('\n').filter(line => {
+    const m = line.match(/^- \[[ x]\] (https?:\/\/\S+)/);
+    if (m && urls.has(m[1])) { removed++; return false; }
+    return true;
+  });
+  writeFileSync(PIPELINE_PATH, kept.join('\n'), 'utf-8');
+  return removed;
+}
+
 // ── Parallel fetch with concurrency limit ───────────────────────────
 
 async function parallelFetch(tasks, limit) {
@@ -356,6 +388,9 @@ async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
   const verify = args.includes('--verify');
+  const recheck = args.includes('--recheck');
+  const recheckLimitFlag = args.indexOf('--recheck-limit');
+  const recheckLimit = recheckLimitFlag !== -1 ? parseInt(args[recheckLimitFlag + 1], 10) : null;
   const companyFlag = args.indexOf('--company');
   const filterCompany = companyFlag !== -1 ? args[companyFlag + 1]?.toLowerCase() : null;
 
@@ -500,6 +535,38 @@ async function main() {
     }
   }
 
+  // 6.5. Optional backlog re-check — re-verify already-scanned pending jobs and
+  // drop the ones that have since been delisted/expired, so the pipeline never
+  // hands an evaluator (or you, at apply time) a dead posting.
+  let recheckStats = null;
+  if (recheck) {
+    let pending = parsePipelinePending();
+    if (Number.isInteger(recheckLimit) && recheckLimit > 0) pending = pending.slice(0, recheckLimit);
+    if (pending.length === 0) {
+      console.log('\nRe-check: no pending pipeline entries to verify.');
+    } else {
+      const estMin = Math.ceil((pending.length * 4) / 60);
+      console.log(`\nRe-checking liveness of ${pending.length} already-scanned pending job(s) with Playwright (sequential, ~${estMin} min)...`);
+      const { expired, invalid } = await verifyOffers(pending);
+      const toRemove = new Set([...expired, ...invalid].map(o => o.url));
+      let removed = 0;
+      if (!dryRun && toRemove.size > 0) {
+        removed = removeFromPipeline(toRemove);
+        if (expired.length > 0) appendToScanHistory(expired, date, 'delisted');
+        if (invalid.length > 0) {
+          const byStatus = new Map();
+          for (const o of invalid) {
+            const status = guardStatusFor(o.code);
+            if (!byStatus.has(status)) byStatus.set(status, []);
+            byStatus.get(status).push(o);
+          }
+          for (const [status, group] of byStatus) appendToScanHistory(group, date, status);
+        }
+      }
+      recheckStats = { checked: pending.length, expired: expired.length, invalid: invalid.length, removed: dryRun ? toRemove.size : removed };
+    }
+  }
+
   // 7. Print summary
   console.log(`\n${'━'.repeat(45)}`);
   console.log(`Portal Scan — ${date}`);
@@ -515,6 +582,10 @@ async function main() {
     console.log(`Invalid (guarded):     ${invalidOffers.length} dropped`);
   }
   console.log(`New offers added:      ${verifiedOffers.length}`);
+  if (recheckStats) {
+    console.log(`Backlog re-checked:    ${recheckStats.checked}`);
+    console.log(`Delisted ${dryRun ? '(would drop)' : 'removed'}:   ${recheckStats.removed} (expired ${recheckStats.expired}, invalid ${recheckStats.invalid})`);
+  }
 
   if (errors.length > 0) {
     console.log(`\nErrors (${errors.length}):`);
