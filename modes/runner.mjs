@@ -59,12 +59,40 @@ const PATHS = {
 };
 
 function retryLlmError(err) {
-  return /rate|timeout|ECONN|ETIMEDOUT|5\d\d|overloaded|429/i.test(String(err?.message || err || ''));
+  // Providers flag transient failures (429 / 5xx / timeout / network) explicitly.
+  if (err && err.retryable === true) return true;
+  return /rate|timeout|ECONN|ETIMEDOUT|5\d\d|overloaded|429|truncat|incomplete|empty (llm )?response/i.test(String(err?.message || err || ''));
+}
+
+// Modes that produce a structured A–H evaluation report. For these we verify the
+// model actually wrote a body (not just a header) before accepting the response.
+const EVALUATION_MODES = /(^|\/)(oferta|angebot|offre|kyujin|is-ilani)$/;
+
+// Guard against silently saving a truncated/empty response. A flaky LLM endpoint
+// occasionally returns just a header (finish_reason=length, partial stream, etc.).
+// Throwing a retryable error here lets withRetry get a clean response; if every
+// attempt is incomplete the caller fails loudly into the dead-letter queue
+// instead of writing a stub report.
+function assertCompleteResponse({ text, finishReason }, mode) {
+  const t = String(text || '').trim();
+  if (!t) throw new Error('empty LLM response');
+  if (finishReason && !/^(stop|end_turn|eos)$/i.test(finishReason)) {
+    throw new Error(`LLM response truncated (finish_reason=${finishReason})`);
+  }
+  if (EVALUATION_MODES.test(mode)) {
+    const body = t.replace(/---SCORE_SUMMARY---[\s\S]*?---END_SUMMARY---/, '');
+    const hasBlocks = /(^|\n)#{1,3}\s*[A-H][\).]/.test(body)
+      || /Role Summary|Match with CV|Resumen del rol|Übereinstimmung|Adéquation/i.test(body);
+    if (!hasBlocks) {
+      throw new Error('LLM response incomplete (evaluation body missing A–H blocks)');
+    }
+  }
 }
 
 function retryLog(err, attempt, delayMs) {
   const msg = String(err?.message || err || 'error').split('\n')[0];
-  console.warn(`  ↻ retry ${attempt} after ${delayMs}ms: ${msg}`);
+  const hint = Number.isFinite(err?.retryAfterMs) ? ' (server Retry-After honored)' : '';
+  console.warn(`  ↻ retry ${attempt} after ${delayMs}ms${hint}: ${msg}`);
 }
 
 // ── helpers ─────────────────────────────────────────────────────
@@ -322,14 +350,23 @@ export async function runMode({
   const { systemPrompt } = buildSystemPrompt(mode, inputs);
   const userPrompt = buildUserPrompt(inputs);
 
-  const { text, usage } = await withRetry(() => prov.complete({
-    system: systemPrompt,
-    user: userPrompt,
-    model: effectiveModel,
-    maxTokens: effectiveMaxTokens,
-    temperature: effectiveTemperature,
-  }), {
-    attempts: 4,
+  const { text, usage } = await withRetry(async () => {
+    const res = await prov.complete({
+      system: systemPrompt,
+      user: userPrompt,
+      model: effectiveModel,
+      maxTokens: effectiveMaxTokens,
+      temperature: effectiveTemperature,
+    });
+    assertCompleteResponse(res, mode);
+    return res;
+  }, {
+    // Overload-tolerant defaults (env-tunable): with baseMs=1000/factor=2 the
+    // backoff is ~1s,2s,4s,8s (capped at maxMs), and a server Retry-After hint
+    // overrides it when longer. Good for a busy NVIDIA NIM endpoint.
+    attempts: Number(process.env.LLM_RETRY_ATTEMPTS) || 5,
+    baseMs: Number(process.env.LLM_RETRY_BASE_MS) || 1000,
+    maxMs: Number(process.env.LLM_RETRY_MAX_MS) || 30000,
     retryOn: retryLlmError,
     onRetry: retryLog,
   });

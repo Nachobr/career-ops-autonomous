@@ -29,12 +29,31 @@ const APPLY_RE = /\b(apply|apply now)\b/i;
 const SAFE_NEXT_RE = /\b(next|continue|save and continue)\b/i;
 const SENSITIVE_RE = /\b(work authorization|authori[sz]ed|visa|sponsor|sponsorship|salary|compensation|expected pay|notice period|relocat|disability|veteran|gender|race|ethnicity|criminal|background check|date of birth|birthdate|ssn|social security)\b/i;
 const SENSITIVE_IT_RE = /\b(autorizzato a lavorare|p\.iva|partita iva|enasarco|domicilio|indirizzo|taglia|privacy|informativa)\b/i;
-const FREE_TEXT_RE = /\b(cover letter|why|motivation|additional information|tell us|anything else|summary)\b/i;
+const FREE_TEXT_RE = /\b(cover letter|why|motivation|additional information|tell us|tell me|anything else|summary|describe|explain|elaborate|walk us|walk me|give an example|provide an example|most proud|proudest|your experience|your approach)\b|\?\s*\*?\s*$|^\s*(how|what|why|when|where|which|who|describe|explain|tell|share|walk|give|provide|list|outline)\b/i;
 const SOURCE_RE = /\b(hear|source|referred|referral|where did you find|how did you find)\b/i;
 const MAX_FORM_STEPS = 5;
 
 function slugify(s) {
   return String(s || 'application').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'application';
+}
+
+// Some ATSs serve the job posting and the application form at different URLs.
+// Lever, for example, shows the description at jobs.lever.co/{co}/{id} (whose
+// only control is an "Apply" anchor link) and the real form fields at
+// .../{id}/apply. Navigating straight to the form page avoids landing on a
+// page where no fillable fields exist yet. Safe no-op for every other host.
+export function normalizeApplyUrl(rawUrl) {
+  if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) return rawUrl;
+  let u;
+  try { u = new URL(rawUrl); } catch { return rawUrl; }
+  if (/(^|\.)lever\.co$/i.test(u.hostname)) {
+    // Path is /{company}/{id}; the form lives at /{company}/{id}/apply.
+    if (/^\/[^/]+\/[0-9a-f-]{8,}\/?$/i.test(u.pathname)) {
+      u.pathname = u.pathname.replace(/\/$/, '') + '/apply';
+      return u.toString();
+    }
+  }
+  return rawUrl;
 }
 
 function stripTags(html) {
@@ -285,14 +304,33 @@ function latestOutputCvPdf(fullName = '') {
   const dir = join(ROOT, 'output');
   if (!existsSync(dir)) return '';
   const nameSlug = slugify(fullName);
-  const candidates = readdirSync(dir)
-    .filter(f => /^cv-.*\.pdf$/i.test(f) && (/candidate/i.test(f) || f.includes(nameSlug)))
+  
+  const files = [];
+  const walk = (currentDir) => {
+    let list;
+    try {
+      list = readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of list) {
+      const entryPath = join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        walk(entryPath);
+      } else if (entry.isFile() && entry.name.endsWith('.pdf')) {
+        files.push({ name: entry.name, path: entryPath });
+      }
+    }
+  };
+  walk(dir);
+
+  const candidates = files
+    .filter(f => /^cv-.*\.pdf$/i.test(f.name) && (/candidate/i.test(f.name) || f.name.includes(nameSlug)))
     .map(f => {
-      const path = join(dir, f);
       let mtime = 0;
-      try { mtime = statSync(path).mtimeMs; } catch {}
-      const priority = f === `cv-${nameSlug}.pdf` ? 3 : f.includes(nameSlug) ? 2 : 1;
-      return { path, mtime, priority };
+      try { mtime = statSync(f.path).mtimeMs; } catch {}
+      const priority = f.name === `cv-${nameSlug}.pdf` ? 3 : f.name.includes(nameSlug) ? 2 : 1;
+      return { path: f.path, mtime, priority };
     });
   return candidates.sort((a, b) => b.priority - a.priority || b.mtime - a.mtime)[0]?.path || '';
 }
@@ -494,7 +532,8 @@ export function proposeAnswers(fields, { profile = {}, report = {}, reportConten
     for (const [re, value] of safe) {
       if (re.test(label) && value) return { ...field, action: 'fill', value, reason: 'low-risk factual profile field' };
     }
-    if (field.kind === 'textarea' || FREE_TEXT_RE.test(label)) return { ...field, action: 'fill', value: fallbackFreeText(label), reason: 'draft free-text answer from report/CV context' };
+    const isSelectKind = ['select', 'custom-select'].includes(field.kind) || field.role === 'combobox';
+    if (field.kind === 'textarea' || (!isSelectKind && FREE_TEXT_RE.test(label))) return { ...field, action: 'fill', value: fallbackFreeText(label), reason: 'draft free-text answer from report/CV context' };
     if (['select', 'custom-select'].includes(field.kind) && SOURCE_RE.test(label)) return { ...field, action: 'fill', value: preferredSourceOption(field.options, appAnswers.source), reason: 'configured source dropdown from profile' };
     return { ...field, action: 'skip', value: '', reason: 'unknown field; left for user review' };
   });
@@ -1148,6 +1187,16 @@ async function fillApplicationFlow(page, context) {
   return { fields: allFields, proposals: applyFillOutcomes(allProposals, context.fillOutcomes || []) };
 }
 
+// True when an error is the result of the page / browser context being torn
+// down mid-operation (user pressed Ctrl+C, closed the window, Chrome got the
+// terminal's SIGINT). These must not crash the run — they mean "stop here".
+function isPageClosedError(err) {
+  if (!err) return false;
+  if (err.name === 'TargetClosedError') return true;
+  const m = String(err.message || '');
+  return /Target (page, context or browser|closed)|has been closed|Execution context was destroyed|browser has been closed|Navigation failed because page (was|has been) closed/i.test(m);
+}
+
 function waitForUserExit(browser) {
   return new Promise((resolveP) => {
     const done = async () => {
@@ -1222,10 +1271,22 @@ async function looksLikeBotChallenge(page) {
       const re = new RegExp(reSrc, 'i');
       const text = (document.body?.innerText || '').slice(0, 4000);
       if (re.test(text)) return true;
-      const widget = document.querySelector(
-        '#challenge-form, #cf-challenge-running, .cf-turnstile, [class*="turnstile" i], iframe[src*="challenges.cloudflare.com" i], iframe[src*="hcaptcha.com" i], iframe[src*="recaptcha" i], iframe[title*="challenge" i]'
-      );
-      return !!widget;
+      // Cloudflare interstitial = always a real, blocking wall.
+      if (document.querySelector('#challenge-form, #cf-challenge-running, iframe[src*="challenges.cloudflare.com" i]')) return true;
+      // hCaptcha / reCAPTCHA / Turnstile widgets only block when they are
+      // actually visible and sized. Lever (and many ATSs) embed an *invisible*
+      // reCAPTCHA iframe (0px / off-screen) for submit-time anti-spam — that is
+      // not a wall and must not trigger the manual-solve wait.
+      const isShownChallenge = (el) => {
+        if (!el) return false;
+        const s = window.getComputedStyle(el);
+        if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 50 && r.height >= 50;
+      };
+      const widgets = document.querySelectorAll('.cf-turnstile, [class*="turnstile" i], iframe[src*="hcaptcha.com" i], iframe[src*="recaptcha" i], iframe[title*="challenge" i]');
+      for (const w of widgets) if (isShownChallenge(w)) return true;
+      return false;
     }, CHALLENGE_TEXT_RE.source);
     return !!hit;
   } catch {
@@ -1276,7 +1337,8 @@ export async function main(argv = process.argv.slice(2)) {
       console.log('Note: real Chrome not found — using bundled Chromium, which some sites flag as a bot.');
       console.log('      Install Google Chrome (or run `npx playwright install chrome`) for best results.');
     }
-    const url = opts.fixture ? pathToFileURL(resolve(opts.fixture)).href : targetUrl;
+    const url = opts.fixture ? pathToFileURL(resolve(opts.fixture)).href : normalizeApplyUrl(targetUrl);
+    if (!opts.fixture && url !== targetUrl) console.log(`↪ Using application form URL: ${url}`);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
     await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
     await page.waitForTimeout(1500);
@@ -1289,7 +1351,31 @@ export async function main(argv = process.argv.slice(2)) {
       const cleared = await waitForChallengeToClear(page, 120000);
       console.log(cleared ? '  ✓ Challenge cleared — continuing.' : '  ⏱ Still challenged after 120s — continuing anyway; fill may be partial.');
     }
-    ({ fields, proposals } = await fillApplicationFlow(page, context));
+    // Ctrl+C (or closing the window) while we are still detecting/filling the
+    // form must not throw an ugly Playwright stack trace. Intercept the signal
+    // for the fill phase only, close the browser, and return cleanly so the
+    // batch runner can advance to the next job.
+    let fillAborted = false;
+    const onFillInterrupt = () => { fillAborted = true; page.close().catch(() => {}); };
+    process.once('SIGINT', onFillInterrupt);
+    process.once('SIGTERM', onFillInterrupt);
+    try {
+      ({ fields, proposals } = await fillApplicationFlow(page, context));
+    } catch (err) {
+      if (fillAborted || isPageClosedError(err)) {
+        console.log('\n↷ Interrupted before the form was ready — skipping this job.');
+        try { await browser.close(); } catch {}
+        return 0;
+      }
+      throw err;
+    } finally {
+      process.removeListener('SIGINT', onFillInterrupt);
+      process.removeListener('SIGTERM', onFillInterrupt);
+    }
+    if (fillAborted) {
+      try { await browser.close(); } catch {}
+      return 0;
+    }
   }
 
   const audit = writeAudit(meta, proposals, opts);

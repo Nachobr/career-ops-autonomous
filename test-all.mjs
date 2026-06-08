@@ -561,6 +561,72 @@ try {
   fail(`withRetry retryOn=false test crashed: ${e.message}`);
 }
 
+// withRetry honors a server Retry-After hint (err.retryAfterMs) over the
+// computed backoff, capped by maxMs — the core of NVIDIA-overload handling.
+try {
+  const { withRetry } = await import(pathToFileURL(join(ROOT, 'lib', 'retry.mjs')).href);
+  let observedDelay = -1;
+  let calls = 0;
+  const out = await withRetry(() => {
+    calls++;
+    if (calls < 2) { const e = new Error('429 overloaded'); e.retryAfterMs = 5000; e.retryable = true; throw e; }
+    return 'ok';
+  }, {
+    attempts: 3, baseMs: 1, jitter: 0, maxMs: 30000,
+    onRetry: (_e, _a, delayMs) => { observedDelay = delayMs; },
+  });
+  if (out === 'ok' && observedDelay === 5000) pass('withRetry honors server Retry-After hint over computed backoff');
+  else fail(`withRetry Retry-After unexpected: out=${out} delay=${observedDelay}`);
+} catch (e) {
+  fail(`withRetry Retry-After test crashed: ${e.message}`);
+}
+
+// withRetry caps the honored Retry-After at maxMs (avoid absurd waits).
+try {
+  const { withRetry } = await import(pathToFileURL(join(ROOT, 'lib', 'retry.mjs')).href);
+  let observedDelay = -1;
+  let calls = 0;
+  await withRetry(() => {
+    calls++;
+    if (calls < 2) { const e = new Error('503'); e.retryAfterMs = 999000; e.retryable = true; throw e; }
+    return 'ok';
+  }, {
+    attempts: 3, baseMs: 1, jitter: 0, maxMs: 2000,
+    onRetry: (_e, _a, delayMs) => { observedDelay = delayMs; },
+  });
+  if (observedDelay === 2000) pass('withRetry caps Retry-After at maxMs');
+  else fail(`withRetry maxMs cap unexpected: delay=${observedDelay}`);
+} catch (e) {
+  fail(`withRetry maxMs cap test crashed: ${e.message}`);
+}
+
+// openai provider marks 429/5xx as retryable and parses Retry-After. Run via a
+// tiny local stub server so no real API/network is touched.
+try {
+  const { complete } = await import(pathToFileURL(join(ROOT, 'modes', 'providers', 'openai.mjs')).href);
+  const server = createServer((req, res) => {
+    res.writeHead(429, { 'content-type': 'application/json', 'retry-after': '7' });
+    res.end(JSON.stringify({ error: 'rate limited' }));
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  const prevBase = process.env.OPENAI_BASE_URL, prevKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_BASE_URL = `http://127.0.0.1:${port}/v1`;
+  process.env.OPENAI_API_KEY = 'test';
+  let err;
+  try { await complete({ system: 's', user: 'u', model: 'm' }); } catch (e) { err = e; }
+  server.close();
+  if (prevBase === undefined) delete process.env.OPENAI_BASE_URL; else process.env.OPENAI_BASE_URL = prevBase;
+  if (prevKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = prevKey;
+  if (err?.status === 429 && err?.retryable === true && err?.retryAfterMs === 7000) {
+    pass('openai provider flags 429 retryable and parses Retry-After header');
+  } else {
+    fail(`openai provider 429 handling unexpected: ${JSON.stringify({ status: err?.status, retryable: err?.retryable, retryAfterMs: err?.retryAfterMs })}`);
+  }
+} catch (e) {
+  fail(`openai provider 429 test crashed: ${e.message}`);
+}
+
 const oldDlqEnv = {
   dlq: process.env.CAREER_OPS_DEAD_LETTER,
   runId: process.env.CAREER_OPS_RUN_ID,
@@ -1193,6 +1259,71 @@ if (assistantHelp && /--confirm-submit/.test(assistantHelp) && /exit\s*\n?\s*cod
   fail('browser assistant --confirm-submit documentation/parse failed');
 }
 try { if (existsSync(auditPath)) unlinkSync(auditPath); } catch {}
+
+console.log('\n14. Semantic fit ranking (lib/semantic-rank.mjs)');
+
+const semanticRankFile = 'lib/semantic-rank.mjs';
+const semanticRankSyntax = run('node', ['--check', semanticRankFile]);
+if (semanticRankSyntax !== null) pass(`${semanticRankFile} syntax OK`);
+else fail(`${semanticRankFile} has syntax errors`);
+
+try {
+  const sr = await import(pathToFileURL(join(ROOT, semanticRankFile)).href);
+
+  // loadTargetRoles handles the dict format (primary + archetypes, "/" split).
+  const tmpProfile = join(mkdtempSync(join(tmpdir(), 'career-ops-')), 'profile.yml');
+  writeFileSync(tmpProfile, [
+    'target_roles:',
+    '  primary:',
+    '    - "AI Engineer"',
+    '    - "Full Stack Developer"',
+    '  archetypes:',
+    '    - name: "Product Manager/owner"',
+    '    - name: "AI Engineer"',  // duplicate — must be deduped
+  ].join('\n'), 'utf-8');
+  const roles = sr.loadTargetRoles(tmpProfile);
+  if (roles.includes('AI Engineer') && roles.includes('Full Stack Developer') && roles.includes('Product Manager') &&
+      roles.filter(r => r === 'AI Engineer').length === 1) {
+    pass('loadTargetRoles parses primary + archetypes, splits "/", dedups');
+  } else {
+    fail(`loadTargetRoles unexpected: ${JSON.stringify(roles)}`);
+  }
+
+  // Empty roles → graceful no-op that keeps all jobs (scan must never break).
+  const jobs = [{ title: 'A' }, { title: 'B' }];
+  const noRoles = await sr.applySemanticRank(jobs, { roles: [] });
+  if (noRoles.ok === false && noRoles.kept.length === 2) {
+    pass('applySemanticRank with no roles is a safe no-op (keeps all offers)');
+  } else {
+    fail(`applySemanticRank no-roles fallback unexpected: ${JSON.stringify({ ok: noRoles.ok, kept: noRoles.kept.length })}`);
+  }
+
+  // Lexical scoring ranks on-target titles above off-target ones, and the
+  // floor drops the off-target roles. Deterministic, no model/network.
+  const roleSet = ['AI Engineer', 'Full Stack Developer', 'Web3 Developer'];
+  const sample = [
+    { title: 'Senior AI Engineer' },
+    { title: 'Full Stack Engineer (AI)' },
+    { title: 'Blockchain Developer' },
+    { title: 'Customer Care Agent Deutschland' },
+    { title: 'Associate Maintenance Manager' },
+    { title: 'Product Engineer - Accounting Domain' },
+  ];
+  const res = await sr.applySemanticRank(sample, { roles: roleSet, floor: 0.4 });
+  const top = res.ranked[0]?.job.title;
+  const keptTitles = new Set(res.kept.map(j => j.title));
+  const onTargetKept = keptTitles.has('Senior AI Engineer') && keptTitles.has('Blockchain Developer');
+  const offTargetDropped = !keptTitles.has('Customer Care Agent Deutschland') &&
+                           !keptTitles.has('Associate Maintenance Manager') &&
+                           !keptTitles.has('Product Engineer - Accounting Domain');
+  if (res.ok && /AI Engineer/.test(top) && onTargetKept && offTargetDropped && typeof res.kept[0]._fitScore === 'number') {
+    pass('applySemanticRank ranks on-target titles up and drops off-target at the floor');
+  } else {
+    fail(`applySemanticRank lexical ranking unexpected: ${JSON.stringify({ top, kept: [...keptTitles] })}`);
+  }
+} catch (e) {
+  fail(`semantic-rank module tests failed: ${e.message}`);
+}
 
 // ── SUMMARY ─────────────────────────────────────────────────────
 

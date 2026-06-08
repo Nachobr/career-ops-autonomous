@@ -14,6 +14,7 @@
 import 'dotenv/config';
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, unlinkSync } from 'fs';
 import { join, dirname, basename } from 'path';
+import yaml from 'js-yaml';
 import { fileURLToPath } from 'url';
 import { execFileSync } from 'child_process';
 import { chromium } from 'playwright';
@@ -192,29 +193,74 @@ function markdownToSimpleHtml(md) {
   return out.join('\n');
 }
 
-function generatedPdfName({ reportFile, company }) {
-  const num = reportNumberFromName(reportFile) || 'draft';
-  const who = existsSync(CV_PATH)
-    ? (readFileSync(CV_PATH, 'utf-8').match(/^#\s*CV\s*[-—]+\s*(.+)$/m)?.[1] || 'candidate')
-    : 'candidate';
-  const slug = `${who}-${company || 'company'}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
-  return `cv-${slug}-${num}.pdf`;
+function detectLanguage(text) {
+  if (!text) return 'en';
+  const spanishWords = /\b(experiencia|requisitos|empresa|trabajo|desarrollo|conocimientos?|años|responsabilidades|ofrecemos|perfil|tecnologías|habilidades|equipo|contrato|remoto|salario|beneficios|buscamos|postular|postularse|CV|español|con|para|una|este|como)\b/gi;
+  const matches = text.match(spanishWords);
+  const count = matches ? matches.length : 0;
+  return count > 3 ? 'es' : 'en';
+}
+
+function getCandidateFullName() {
+  try {
+    const profilePath = join(ROOT, 'config', 'profile.yml');
+    if (existsSync(profilePath)) {
+      const parsed = yaml.load(readFileSync(profilePath, 'utf-8'));
+      if (parsed?.candidate?.full_name) {
+        return parsed.candidate.full_name;
+      }
+    }
+  } catch (e) {
+    console.warn(`⚠️  Could not read candidate full name from profile.yml: ${e.message}`);
+  }
+  return 'candidate';
+}
+
+function generatedPdfName() {
+  const fullName = getCandidateFullName();
+  const slug = fullName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+  return `cv-${slug}.pdf`;
 }
 
 function generatePdfForReport(reportFile, { job, summary } = {}) {
-  if (!existsSync(CV_PATH)) return null;
-  mkdirSync(OUTPUT_DIR, { recursive: true });
+  let jdText = job?.jd || '';
+  if (!jdText && reportFile) {
+    try {
+      jdText = readFileSync(join(REPORTS_DIR, reportFile), 'utf-8');
+    } catch {}
+  }
+  const lang = detectLanguage(jdText);
+  const cvFile = lang === 'es'
+    ? (existsSync(join(ROOT, 'cv.md')) ? 'cv.md' : 'cv-en.md')
+    : (existsSync(join(ROOT, 'cv-en.md')) ? 'cv-en.md' : 'cv.md');
+  const cvPath = join(ROOT, cvFile);
+
+  if (!existsSync(cvPath)) return null;
+
   const company = cleanCompany(summary?.company, job?.company || 'company');
   const role = cleanRole(summary?.role, job?.title || 'role');
-  const cv = readFileSync(CV_PATH, 'utf-8');
-  const htmlPath = join(OUTPUT_DIR, `.cv-${reportNumberFromName(reportFile) || Date.now()}.html`);
-  const pdfRel = `output/${generatedPdfName({ reportFile, company })}`;
+  const cv = readFileSync(cvPath, 'utf-8');
+
+  const num = reportNumberFromName(reportFile) || 'draft';
+  const companySlug = company.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const jobDirRel = `output/${num}-${companySlug}`;
+  const jobDir = join(ROOT, jobDirRel);
+  mkdirSync(jobDir, { recursive: true });
+
+  const htmlPath = join(jobDir, `.cv-${num}-${Date.now()}.html`);
+  const pdfName = generatedPdfName();
+  const pdfRel = `${jobDirRel}/${pdfName}`;
   const pdfPath = join(ROOT, pdfRel);
+
+  const label = lang === 'es'
+    ? `Adaptado para ${escapeHtml(company)} — ${escapeHtml(role)}`
+    : `Tailored for ${escapeHtml(company)} — ${escapeHtml(role)}`;
+
   const html = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${escapeHtml(company)} CV</title>
 <style>
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:42px;color:#111827;line-height:1.45;font-size:12px}h1{font-size:26px;margin:0 0 12px}h2{font-size:15px;margin:18px 0 6px;border-bottom:1px solid #ddd;padding-bottom:3px}h3{font-size:13px;margin:12px 0 4px}p{margin:4px 0}ul{margin:5px 0 8px 18px;padding:0}li{margin:3px 0}.target{font-size:11px;color:#4b5563;margin-bottom:14px}
-</style></head><body><div class="target">Tailored for ${escapeHtml(company)} — ${escapeHtml(role)}</div>${markdownToSimpleHtml(cv)}</body></html>`;
+</style></head><body><div class="target">${label}</div>${markdownToSimpleHtml(cv)}</body></html>`;
   writeFileSync(htmlPath, html, 'utf-8');
   try {
     execFileSync(process.execPath, [join(ROOT, 'generate-pdf.mjs'), htmlPath, pdfPath], { cwd: ROOT, stdio: 'inherit' });
@@ -696,6 +742,7 @@ async function main() {
       if (interrupted) break;
 
       const jd = await scrapeJD(browser, job.url, job.company);
+      job.jd = jd;
 
       if (!jd || jd.length < 200) {
         console.warn(`⏭️  Skipping ${job.company}: Could not extract enough text.`);

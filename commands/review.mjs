@@ -25,6 +25,7 @@ import { createHash } from 'crypto';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
+import { createInterface } from 'readline';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -375,13 +376,18 @@ async function cmdApplyAll(opts = {}) {
 
   let opened = 0;
   let skipped = 0;
+  // Per-item submit confirmation is unreliable in a batch (the Ctrl+C that
+  // advances to the next job collides with the y/N prompt). Instead we collect
+  // every job whose browser flow opened and confirm them all in one pass at the
+  // end — see the confirmation prompt below.
+  const openedRows = [];
   try {
     for (let i = 0; i < pending2.length; i++) {
       if (aborted) { console.log(yellow('\n■ Batch aborted by user.')); break; }
       const row = pending2[i];
       console.log(cyan(`\n[${i + 1}/${pending2.length}] ${row.id}  ${row.score}  ${row.company} — ${row.role}`));
-      const code = await cmdApprove(row.id, { browser: true, confirmSubmit: opts.confirmSubmit !== false, forwardArgs: opts.forwardArgs || [] });
-      if (code === 0) opened++;
+      const code = await cmdApprove(row.id, { browser: true, confirmSubmit: false, forwardArgs: opts.forwardArgs || [] });
+      if (code === 0) { opened++; openedRows.push(row); }
       else { skipped++; console.log(yellow(`↷ skipped ${row.id} (see message above)`)); }
     }
   } finally {
@@ -389,8 +395,53 @@ async function cmdApplyAll(opts = {}) {
   }
 
   console.log(bold(`\n✔ Batch complete: ${opened} opened, ${skipped} skipped of ${pending2.length}.`));
-  console.log(dim('Jobs you confirmed submitted were marked automatically. To mark others: career-ops review submitted <id>'));
+
+  await confirmSubmittedBatch(openedRows);
   return 0;
+}
+
+// After the browser walk, ask the user which jobs they actually submitted and
+// flip those queue rows + tracker entries to Applied. Reliable because it runs
+// once, after every window is closed — no race with the advance Ctrl+C.
+async function confirmSubmittedBatch(rows) {
+  // Only ask about rows still pending (skip ones already flipped elsewhere).
+  const pendingNow = new Set(readQueue().filter(r => r.status === 'pending').map(r => r.id));
+  const candidates = rows.filter(r => pendingNow.has(r.id));
+  if (candidates.length === 0) return;
+
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.log(dim(`To mark the ones you submitted: career-ops review submitted <id>`));
+    return;
+  }
+
+  console.log(bold('\nWhich of these did you submit? I will mark them Applied.'));
+  candidates.forEach((r, idx) => {
+    console.log(`  ${cyan(String(idx + 1))}  ${r.score}  ${r.company} — ${r.role}`);
+  });
+  console.log(dim('Enter numbers (e.g. 1,3), "all", or press Enter for none.'));
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await new Promise((res) => rl.question('> ', (a) => { rl.close(); res((a || '').trim()); }));
+
+  let chosen = [];
+  if (/^all$/i.test(answer)) {
+    chosen = candidates;
+  } else if (answer) {
+    const idxs = answer.split(/[,\s]+/).map(s => parseInt(s, 10)).filter(n => Number.isInteger(n) && n >= 1 && n <= candidates.length);
+    chosen = [...new Set(idxs)].map(n => candidates[n - 1]);
+  }
+
+  if (chosen.length === 0) {
+    console.log(dim('No jobs marked submitted. To mark later: career-ops review submitted <id>'));
+    return;
+  }
+
+  for (const r of chosen) {
+    const res = markSubmitted(r.id, `Submitted via apply assistant ${new Date().toISOString().slice(0, 10)}`);
+    if (res.found) {
+      console.log(green(`✔ ${r.id} ${r.company} marked submitted`) + (res.trackerUpdated ? green('  · tracker → Applied') : dim('  · tracker row not found')));
+    }
+  }
 }
 
 function cmdPrune(opts = {}) {

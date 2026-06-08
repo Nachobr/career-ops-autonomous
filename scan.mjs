@@ -26,6 +26,10 @@
  *   node scan.mjs --verify         # Playwright-check each new URL; drop expired postings
  *   node scan.mjs --recheck        # re-verify already-scanned pending jobs; drop delisted ones
  *   node scan.mjs --recheck --recheck-limit 50   # cap the re-check at 50 postings
+ *   node scan.mjs --rank          # lexical fit-rank offers vs profile target_roles (local, zero deps)
+ *   node scan.mjs --rank --rank-floor 0.4        # drop offers below 0.4 fit score (0-1)
+ *   node scan.mjs --rank --rank-top-k 30         # keep only the 30 best matches
+ *   node scan.mjs --no-rank       # disable ranking even if enabled in portals.yml
  */
 
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, readdirSync } from 'fs';
@@ -393,6 +397,12 @@ async function main() {
   const recheckLimit = recheckLimitFlag !== -1 ? parseInt(args[recheckLimitFlag + 1], 10) : null;
   const companyFlag = args.indexOf('--company');
   const filterCompany = companyFlag !== -1 ? args[companyFlag + 1]?.toLowerCase() : null;
+  const rankFlag = args.includes('--rank');
+  const noRankFlag = args.includes('--no-rank');
+  const rankFloorFlag = args.indexOf('--rank-floor');
+  const rankFloorArg = rankFloorFlag !== -1 ? parseFloat(args[rankFloorFlag + 1]) : null;
+  const rankTopKFlag = args.indexOf('--rank-top-k');
+  const rankTopKArg = rankTopKFlag !== -1 ? parseInt(args[rankTopKFlag + 1], 10) : null;
 
   // 1. Load providers
   const providers = await loadProviders(PROVIDERS_DIR);
@@ -492,14 +502,47 @@ async function main() {
 
   await parallelFetch(tasks, CONCURRENCY);
 
+  // 5.4. Optional lexical fit ranking — re-rank the keyword-passing offers by
+  // how well their titles overlap your profile target_roles, then keep only the
+  // best matches (floor and/or top-K). Zero dependencies, runs locally and
+  // instantly. Skips gracefully (keeps all offers) if no target_roles exist.
+  // Enable via --rank or `semantic_rank.enabled: true` in portals.yml; disable
+  // a configured default for one run with --no-rank.
+  const rankCfg = config.semantic_rank || {};
+  const rankEnabled = !noRankFlag && (rankFlag || rankCfg.enabled === true);
+  let rankedOffers = newOffers;
+  if (rankEnabled && newOffers.length > 0) {
+    const floor = rankFloorArg != null && !Number.isNaN(rankFloorArg)
+      ? rankFloorArg
+      : (typeof rankCfg.min_similarity === 'number' ? rankCfg.min_similarity : null);
+    const topK = Number.isInteger(rankTopKArg) && rankTopKArg > 0
+      ? rankTopKArg
+      : (Number.isInteger(rankCfg.top_k) && rankCfg.top_k > 0 ? rankCfg.top_k : null);
+    try {
+      const { applySemanticRank } = await import('./lib/semantic-rank.mjs');
+      console.log(`\n🧠 Fit ranking ${newOffers.length} offer(s) against your target_roles...`);
+      const res = await applySemanticRank(newOffers, { floor, topK });
+      if (res.ok) {
+        const dropped = newOffers.length - res.kept.length;
+        console.log(`   roles: ${res.roles.join(', ')}`);
+        console.log(`   kept ${res.kept.length}, dropped ${dropped}${floor != null ? ` (floor ${floor})` : ''}${topK != null ? ` (top-K ${topK})` : ''}`);
+        rankedOffers = res.kept;
+      } else {
+        console.log(`   ⚠️  ranking skipped (${res.reason}) — keeping all ${newOffers.length} offers`);
+      }
+    } catch (err) {
+      console.log(`   ⚠️  ranking unavailable (${String(err.message).split('\n')[0]}) — keeping all ${newOffers.length} offers`);
+    }
+  }
+
   // 5.5. Optional liveness verification — drop expired and guard-rejected postings
-  let verifiedOffers = newOffers;
+  let verifiedOffers = rankedOffers;
   let expiredOffers = [];
   let droppedOffers = [];
   let invalidOffers = [];
-  if (verify && newOffers.length > 0) {
-    console.log(`\nVerifying liveness of ${newOffers.length} new offer(s) with Playwright (sequential)...`);
-    const result = await verifyOffers(newOffers);
+  if (verify && rankedOffers.length > 0) {
+    console.log(`\nVerifying liveness of ${rankedOffers.length} new offer(s) with Playwright (sequential)...`);
+    const result = await verifyOffers(rankedOffers);
     verifiedOffers = result.verified;
     expiredOffers = result.expired;
     droppedOffers = result.dropped;
