@@ -122,6 +122,7 @@ ${bold('Examples:')}
   career-ops eval --file ./jds/role.txt   # evaluate one JD
   career-ops run --dry-run                # preview end-to-end pipeline
   career-ops run --max-jobs 3             # full pipeline, cap evals at 3
+  career-ops run --apply-all              # full cycle incl. browser apply (never submits)
 
 ${dim('All extra args after the subcommand are forwarded to the underlying script.')}
 ${dim('Aliases: ' + Object.entries(ALIASES).map(([a,t]) => `${a} → ${t}`).join(', '))}
@@ -145,6 +146,10 @@ function printHelpFor(name) {
   --auto-apply             After a successful run, open browser form-filler
                            for newly queued high-fit jobs. Never submits.
   --auto-apply-limit N     Max browser flows to open (default: 1).
+  --apply-all              After a successful run, walk the ENTIRE pending review
+                           queue in the browser (superset of --auto-apply).
+                           Never submits.
+  --apply-min-score N      With --apply-all, only open jobs scoring >= N.
   --llm-base URL           Override LOCAL_LLM_BASE_URL (e.g. Colab ngrok URL).
   --llm-model NAME         Override LOCAL_LLM_MODEL.
   --llm-key TOKEN          Override LOCAL_LLM_API_KEY.

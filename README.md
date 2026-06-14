@@ -77,7 +77,7 @@ Built by someone who used it to evaluate 740+ job offers, generate 100+ tailored
 | **Dashboard TUI** | Terminal UI to browse, filter, and sort your pipeline |
 | **Human-in-the-Loop** | AI evaluates and recommends, you decide and act. The system never submits an application -- you always have the final call |
 | **Pipeline Integrity** | Automated merge, dedup, status normalization, health checks |
-| **Autonomous Run** | Single `career-ops run` orchestrates scan → evaluate → PDF → tracker → verify end-to-end |
+| **Autonomous Run** | Single `career-ops run` orchestrates scan → evaluate → PDF → tracker → verify end-to-end; add `--apply-all` to also walk the review queue in the browser (never submits) |
 | **Scheduling** | `career-ops schedule` installs a launchd/systemd timer (or foreground daemon) to run on a cadence |
 | **Review Queue** | High-scoring offers queue for approval; nothing is submitted without your explicit action |
 | **Resilience** | Exponential-backoff retries + a dead-letter queue so one flaky URL never aborts the batch |
@@ -167,6 +167,8 @@ Career-Ops is driven by a unified CLI binary `career-ops`. Once linked globally 
 ```bash
 career-ops                                  # Show help and all subcommands
 career-ops run                              # End-to-end cycle: doctor -> scan -> pipeline -> merge -> normalize -> dedup -> verify -> followup
+career-ops run --apply-all                  # Full cycle incl. apply: ...above... -> browser-fills every queued job (never submits)
+career-ops run --max-jobs 1 --auto-apply    # Evaluate 1 job, then open the browser only for newly queued high-fit jobs
 career-ops login --status                   # Check LLM provider key status
 career-ops login --provider openai          # Log in/save key for a provider
 career-ops scan                             # Scan portals for new job postings
