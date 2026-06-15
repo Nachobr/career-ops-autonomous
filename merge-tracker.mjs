@@ -118,6 +118,11 @@ const BASELINE_TOKENS = new Set([
   'analyst', 'designer', 'consultant', 'specialist',
   'platform', 'systems', 'services',
   'backend', 'frontend', 'fullstack',
+  // Role-family prefixes that name a hiring track, not a specific role.
+  // Without these, every "Forward Deployed X Engineer" collapses into one
+  // entry because forward+deployed+engineer overlap dominates (see Palantir
+  // FDE family: AI / Reliability / Security / Software are the real specialty).
+  'forward', 'deployed', 'deployment',
 ]);
 
 function roleTokens(s) {
